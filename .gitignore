@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+/metalscout.yaml
+/data/
+/exports/
+/logs/
+*.db
+*.db-wal
+*.db-shm
+.env
+creds*.json
+service-account*.json
+.pytest_cache/
+*.egg-info/

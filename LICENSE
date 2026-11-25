@@ -1,0 +1,7 @@
+Copyright (c) 2026. All rights reserved.
+
+This repository is private and proprietary. No license is granted to copy, modify, or distribute
+this software without the owner's written permission.
+
+Third-party dependencies are used under their own licenses (see pyproject.toml).
+Architecture ideas were studied from Sellbird (AGPL-3.0); no Sellbird code is included (docs/REFERENCE_SELLBIRD.md).

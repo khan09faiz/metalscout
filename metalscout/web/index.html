@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MetalScout</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">◆</span> MetalScout <small id="biz"></small></div>
+  <div class="actions">
+    <span id="runstate" class="pill">idle</span>
+    <button id="runBtn" class="primary">Find leads now</button>
+    <a class="btn" href="/api/export">Download Excel</a>
+  </div>
+</header>
+
+<section class="kpis">
+  <div class="kpi"><b id="kLeads">–</b><span>Leads (end users)</span></div>
+  <div class="kpi a"><b id="kA">–</b><span>Tier A</span></div>
+  <div class="kpi"><b id="kB">–</b><span>Tier B</span></div>
+  <div class="kpi new"><b id="kNew">–</b><span>New today</span></div>
+  <div class="kpi"><b id="kSig">–</b><span>Buyer signals</span></div>
+  <div class="kpi"><b id="kQueue">–</b><span>Queued sites</span></div>
+  <div class="kpi wide"><b id="kNext">–</b><span>Next daily run · <span id="kLast"></span></span></div>
+</section>
+
+<nav class="tabs">
+  <button data-tab="leads" class="on">Leads</button>
+  <button data-tab="signals">Buyer signals</button>
+  <button data-tab="runs">Runs &amp; log</button>
+  <button data-tab="add">Add sites</button>
+</nav>
+
+<main>
+  <section id="tab-leads">
+    <div class="filters">
+      <input id="q" placeholder="Search company, metal, city…">
+      <select id="tier"><option value="">All tiers</option><option>A</option><option>B</option><option>C</option></select>
+      <select id="metal"><option value="">All metals</option></select>
+      <label><input type="checkbox" id="onlyNew"> New today</label>
+      <label><input type="checkbox" id="withContact"> Has email/phone</label>
+      <label><input type="checkbox" id="showTraders"> Show traders</label>
+      <span id="count" class="muted"></span>
+    </div>
+    <table>
+      <thead><tr><th>Tier</th><th>Score</th><th>Company</th><th>Metals</th><th>Quantity</th><th>Email</th><th>Phone</th><th>Why</th><th>Stage</th></tr></thead>
+      <tbody id="leadRows"></tbody>
+    </table>
+    <p id="empty" class="empty" hidden>No leads yet. Click <b>Find leads now</b>; the first run takes 10–30 minutes.</p>
+  </section>
+
+  <section id="tab-signals" hidden>
+    <p class="muted">Marketplace, tender and social pages found by search. Restricted hosts (IndiaMART, LinkedIn…) are not opened; open the link yourself.</p>
+    <table>
+      <thead><tr><th>Intent</th><th>Kind</th><th>Title / link</th><th>Metals</th><th>Quantity</th><th>Contacts</th><th>Seen</th></tr></thead>
+      <tbody id="sigRows"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-runs" hidden>
+    <table>
+      <thead><tr><th>Run</th><th>Trigger</th><th>Status</th><th>Queries</th><th>New companies</th><th>Profiled</th><th>Failed</th><th>Signals</th><th>Errors</th></tr></thead>
+      <tbody id="runRows"></tbody>
+    </table>
+    <h3>Log</h3>
+    <pre id="log"></pre>
+  </section>
+
+  <section id="tab-add" hidden>
+    <p>Paste company websites (one per line). They are profiled on the next run.</p>
+    <textarea id="urls" rows="8" placeholder="https://example-forgings.com"></textarea>
+    <div><button id="addBtn" class="primary">Queue sites</button> <button id="profileBtn">Queue + profile now</button> <span id="addMsg" class="muted"></span></div>
+    <p class="muted">Bulk import tender / trade-show lists from the terminal: <code>python -m metalscout import file.csv</code> (columns: <code>website</code> and/or <code>url</code>, <code>title</code>).</p>
+  </section>
+</main>
+
+<aside id="drawer" hidden>
+  <button class="close" id="closeDrawer">×</button>
+  <div id="drawerBody"></div>
+</aside>
+
+<script src="/app.js"></script>
+</body>
+</html>

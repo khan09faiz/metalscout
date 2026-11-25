@@ -1,0 +1,26 @@
+[project]
+name = "metalscout"
+version = "1.0.0"
+description = "Find manufacturers and end users that buy raw metal (India). Deterministic daily pipeline + dashboard."
+requires-python = ">=3.10"
+dependencies = ["playwright>=1.45", "phonenumbers>=8.13", "selectolax>=0.3.21", "tldextract>=5", "pyyaml>=6", "ddgs>=9", "httpx>=0.25", "openpyxl>=3.1"]
+
+[project.optional-dependencies]
+sheets = ["gspread>=6"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+metalscout = "metalscout.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["metalscout"]
+
+[tool.setuptools.package-data]
+metalscout = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
