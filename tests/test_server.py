@@ -23,3 +23,17 @@ def test_status_static_and_traversal(cfg):
             assert e.code == 404
     finally:
         srv.shutdown()
+
+
+def test_public_host_requires_password(cfg, monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(cfg))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{srv.server_port}/api/leads")
+        raise AssertionError("served without a password")
+    except urllib.error.HTTPError as e:
+        assert e.code == 503
+    finally:
+        srv.shutdown()

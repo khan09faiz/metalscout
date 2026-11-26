@@ -125,6 +125,9 @@ def make_handler(cfg: dict):
 
         def _authed(self) -> bool:
             if not password:
+                if os.getenv("VERCEL"):  # never serve lead data on a public URL without a password
+                    self._send(503, {"error": "Set DASHBOARD_PASSWORD in Vercel (Settings -> Environment Variables), then redeploy."})
+                    return False
                 return True
             h = self.headers.get("Authorization", "")
             if h.startswith("Basic "):
