@@ -1,0 +1,10 @@
+tests/
+docs/
+data/
+exports/
+logs/
+scripts/
+prompts/
+.github/
+*.db
+metalscout.yaml

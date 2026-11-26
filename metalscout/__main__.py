@@ -28,7 +28,7 @@ def main(argv=None):
     s.add_parser("init")
     r = s.add_parser("run")
     r.add_argument("--trigger", default="manual")
-    r.add_argument("--stages", default="discover,profile,signals,export")
+    r.add_argument("--stages", default="discover,profile,signals,agents,export")
     r.add_argument("--profile-limit", type=int)
     sv = s.add_parser("serve")
     sv.add_argument("--no-scheduler", action="store_true")
@@ -84,8 +84,9 @@ def main(argv=None):
         else:
             print(json.dumps(export.daily(open_db(cfg), cfg), indent=2))
     if args.cmd == "status":
+        from .engine import open_db
         from .server import status
-        print(json.dumps(status(cfg), indent=2, default=str))
+        print(json.dumps(status(cfg, open_db(cfg)), indent=2, default=str))
     if args.cmd == "schedule":
         from . import scheduler
         if args.action == "show":

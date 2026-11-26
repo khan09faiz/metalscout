@@ -21,6 +21,19 @@ Every observation is `(signal, value, num, source_url, evidence)`. The profiler 
 | `UNREACHABLE` | no page loaded | — | status=failed |
 | `CHALLENGED` | bot-challenge page | — | status=challenged |
 
+## Agent signals (optional crew, see AGENTS.md)
+Stored only if the agent's `quote` is found in the crawled text; `source_url` is the page it was found on and `evidence` is the quote.
+
+| Signal | From | Value | Used in score |
+|---|---|---|---|
+| `AGENT_ORG_TYPE` | Sorter | manufacturer / trader / both / service / unknown (num = confidence) | overrides ORG_TYPE when confidence ≥ `agents.min_confidence` |
+| `AGENT_MATERIAL` | Analyst | `metal: form/grade`, e.g. `steel: EN8 alloy steel` | counts as a metal match |
+| `AGENT_VOLUME` | Analyst | e.g. `120 MT per month` (num = kg/month) | counts as quantity |
+| `AGENT_PRODUCT` | Analyst | product name | — |
+| `AGENT_PERSON` | Analyst | `Name — Title` | — |
+| `AGENT_BUYING_SIGNAL` | Analyst | expansion / vendor registration / RFQ text | counts as intent |
+| `AGENT_OUTREACH` | Writer | JSON `{subject, body}` draft, never sent | — |
+
 ## Rules worth knowing
 - **Emails** come only from the page: plain text, `mailto:`, `name [at] domain [dot] com`, and Cloudflare `data-cfemail`. Placeholders (`name@company.com`), image filenames and noreply addresses are dropped. Nothing is pattern-guessed.
 - **Phones** are validated as Indian numbers by `phonenumbers` and normalised to E.164.

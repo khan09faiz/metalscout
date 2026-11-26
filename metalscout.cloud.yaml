@@ -1,0 +1,76 @@
+# Config used by the cloud setup (GitHub Actions engine + Vercel dashboard). Edit and push to change it.
+# Secrets (DATABASE_URL, model keys) are NOT here: they live in GitHub/Vercel secrets.
+business:
+  name: "My Metals Co"
+  # metals you can supply; keys: steel stainless aluminium copper brass zinc nickel pig_iron ferro_alloy lead_tin
+  sells: [steel, stainless, aluminium, copper, brass, zinc, pig_iron, ferro_alloy]
+  region: India
+
+search:
+  # {metal} x {industry} x {city} x template = the query space. The engine walks it in order,
+  # queries_per_run at a time, so each daily run searches new ground.
+  metals: ["HR coil", "aluminium ingot", "copper cathode", "stainless steel", "brass ingot", "zinc ingot", "pig iron", "ferro alloys"]
+  industries: ["forging", "foundry", "wire and cable", "auto components", "pipes and tubes", "fasteners",
+               "transformer", "utensils", "aluminium extrusion", "galvanizing", "solar structure", "castings"]
+  clusters: ["Rajkot", "Ludhiana", "Jamnagar", "Pune", "Coimbatore", "Chennai", "Faridabad", "Howrah",
+             "Ahmedabad", "Aurangabad", "Moradabad", "Kolkata", "Hosur", "Gurugram"]
+  templates:
+    - "{industry} manufacturer {city} {metal} raw material contact"
+    - "{industry} company {city} installed capacity tonnes {metal}"
+    - "{metal} requirement {industry} {city} vendor registration"
+  queries_per_run: 40      # ~2-3 min of searching
+  results_per_query: 10
+  provider: auto           # auto | serper | duckduckgo   (serper needs SERPER_API_KEY env var; 2,500 free)
+
+domains:
+  # buyer-intent pages: stored as "buyer signals", opened by the browser unless restricted
+  signal: [indiamart.com, tradeindia.com, exportersindia.com, linkedin.com, facebook.com, tender247.com, tenderdetail.com,
+           bidassist.com, gem.gov.in, eprocure.gov.in, justdial.com, alibaba.com, x.com, twitter.com, reddit.com, quora.com,
+           youtube.com, instagram.com, tendersontime.com, mjunction.in, recycleinme.com]
+  # terms forbid automated access, or the site litigates scraping: snippet only, page never opened
+  restricted: [indiamart.com, linkedin.com, facebook.com, instagram.com, x.com, twitter.com, justdial.com, alibaba.com]
+  # never useful as a company site
+  skip: [wikipedia.org, pinterest.com, amazon.in, amazon.com, flipkart.com, naukri.com, glassdoor.com, glassdoor.co.in, indeed.com,
+         medium.com, bing.com, google.com, zaubacorp.com, falconebiz.com, thecompanycheck.com, tofler.in, kompass.com,
+         dnb.com, ambitionbox.com, scribd.com, slideshare.net, justdial.com, sulekha.com, yellowpages.in, made-in-china.com]
+
+crawl:
+  max_pages: 12            # per company site
+  max_depth: 2
+  concurrency: 3           # sites in parallel
+  delay_min: 1.0           # seconds between pages on one site
+  delay_max: 2.5
+  site_timeout_s: 150
+
+pipeline:
+  profile_per_run: 60      # company sites read per run
+  signals_per_run: 40
+  reprofile_after_days: 30 # re-read sites monthly so changes show up
+
+fit:                       # score weights (total 100) and tier cut-offs
+  manufacturer: 30
+  metal_match: 20
+  quantity: 15
+  email: 15
+  phone: 10
+  registration: 5
+  intent: 5
+  tier_a: 65
+  tier_b: 40
+
+schedule:
+  daily_at: "01:00"        # UTC; must match the cron in .github/workflows/engine.yml (01:00 UTC = 06:30 IST)
+  enabled: true
+
+export:
+  dir: exports             # leads_YYYY-MM-DD.xlsx + leads_latest.xlsx/.csv
+  keep_days: 30
+  gsheet_id: ""            # optional: Google Sheet key to mirror the Leads tab
+  gsheet_creds: ""         # optional: service-account JSON path
+
+web:
+  host: 127.0.0.1
+  port: 8000
+
+compliance:
+  do_not_contact: []       # domains or emails that must never appear as leads

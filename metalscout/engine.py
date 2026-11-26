@@ -15,7 +15,6 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from . import export, profile, sources
-from .browser import Surfer
 from .config import path
 from . import extract as X
 from .db import DB
@@ -59,17 +58,25 @@ class Lock:
         self.p.unlink(missing_ok=True)
 
 
-def is_running(cfg: dict) -> bool:
+def is_running(cfg: dict, db: DB | None = None) -> bool:
+    """A run is active if this machine holds the lock file, or the shared DB has a recent 'running' run
+    (that's how the Vercel dashboard sees a run happening in GitHub Actions)."""
     p = path(cfg, "data", "engine.lock")
-    if not p.exists():
-        return False
+    if p.exists():
+        try:
+            if time.time() - json.loads(p.read_text()).get("t", 0) < 6 * 3600:
+                return True
+        except ValueError:
+            pass
     try:
-        return time.time() - json.loads(p.read_text()).get("t", 0) < 6 * 3600
-    except ValueError:
+        return bool((db or open_db(cfg)).running_run())
+    except Exception:
         return False
 
 
 async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: list[str], limit: int | None = None) -> None:
+    from .browser import Surfer  # Playwright only needed by the engine, not by the web dashboard
+    from .agents.ground import build_digest
     pc = cfg["pipeline"]
     todo = db.companies_needing_profile(limit or pc["profile_per_run"], pc["reprofile_after_days"])
     stats.update(profiled=0, profile_failed=0, profile_queue=len(todo))
@@ -83,6 +90,8 @@ async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: lis
                     pages = await s.crawl(c["website"])
                     name, status, obs = profile.observe(c["website"], pages)
                     db.save_profile(c["id"], run_id, name, status, obs, "" if status == "profiled" else status)
+                    if status == "profiled":
+                        db.save_digest(c["id"], build_digest(pages))
                     stats["profiled" if status == "profiled" else "profile_failed"] += 1
                     log.info("profiled %-35s %-10s %d obs", c["domain"], status, len(obs))
                 except Exception as e:
@@ -94,6 +103,7 @@ async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: lis
 
 
 async def stage_signals(db: DB, cfg: dict, stats: dict, errors: list[str]) -> None:
+    from .browser import Surfer
     todo = db.signals_to_open(cfg["pipeline"]["signals_per_run"])
     stats.update(signals_opened=0)
     if not todo:
@@ -111,14 +121,17 @@ async def stage_signals(db: DB, cfg: dict, stats: dict, errors: list[str]) -> No
             text = page["text"] + " " + (r["snippet"] or "")
             db.update_signal(r["id"], opened=1, metals=list(X.metals_in(text)), quantity=[q["value"] for q in X.quantities(text, strict=False)],
                              emails=X.emails(page["text"], page["html"])[:6], phones=X.phones(page["text"])[:6],
-                             intent=len(X.classify(text)["intent_hits"]))
+                             intent=len(X.classify(text)["intent_hits"]), digest=page["text"][:6000])
             stats["signals_opened"] += 1
 
 
-def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "signals", "export"), profile_limit: int | None = None) -> dict:
+def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "signals", "agents", "export"), profile_limit: int | None = None) -> dict:
     setup_logging(cfg)
     db = open_db(cfg)
     with Lock(cfg):
+        other = db.running_run()
+        if other:
+            raise RuntimeError(f"run {other['id']} ({other['trigger']}) is still in progress")
         rid = db.start_run(trigger)
         stats: dict = {}
         errors: list[str] = []
@@ -132,6 +145,13 @@ def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "sign
                     asyncio.run(stage_profile(db, cfg, rid, stats, errors, profile_limit))
                 elif st == "signals":
                     asyncio.run(stage_signals(db, cfg, stats, errors))
+                elif st == "agents":
+                    from .agents.crew import Crew
+                    ac = cfg.get("agents", {})
+                    if ac.get("enabled", True):
+                        Crew(db, cfg, rid, stats, errors).run(ac.get("companies_per_run", 40), ac.get("signals_per_run", 30))
+                    else:
+                        stats["agents"] = "disabled in config"
                 elif st == "export":
                     stats["export"] = export.daily(db, cfg)
             except Exception as e:

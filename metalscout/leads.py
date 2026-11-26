@@ -25,6 +25,7 @@ def build(db: DB, cfg: dict, include_traders: bool = True) -> list[dict]:
         obs = db.latest_observations(c["id"], c["last_profile_run"])
         f = fit.score(c, obs, cfg)
         org = next((o["value"] for o in obs if o["signal"] == "ORG_TYPE"), "unknown")
+        org = f.get("org") or org  # a confident agent verdict can override the regex classifier
         if not include_traders and org == "trader":
             continue
         out.append({
@@ -39,8 +40,26 @@ def build(db: DB, cfg: dict, include_traders: bool = True) -> list[dict]:
             "pages_read": next((o["num"] for o in obs if o["signal"] == "PAGES_READ"), 0),
             "found_via": c["found_via"], "first_seen": iso(c["first_seen"]), "last_profiled": iso(c["last_profiled"]),
             "is_new": (c["first_seen"] or 0) >= day_ago, "error": c["error"],
+            "ai": _ai(obs),
         })
     out.sort(key=lambda r: (-r["score"], r["domain"]))
+    return out
+
+
+def _ai(obs: list[dict]) -> dict:
+    """Agent findings for the UI: every item carries the exact quote and the page it was verified on."""
+    out = {"org_type": None, "materials": _pairs(obs, "AGENT_MATERIAL", 8), "volume": _pairs(obs, "AGENT_VOLUME", 2),
+           "people": _pairs(obs, "AGENT_PERSON", 6), "products": _pairs(obs, "AGENT_PRODUCT", 6),
+           "buying_signals": _pairs(obs, "AGENT_BUYING_SIGNAL", 4), "outreach": None}
+    for o in obs:
+        if o["signal"] == "AGENT_ORG_TYPE":
+            out["org_type"] = {"value": o["value"], "confidence": o["num"], "source": o["source_url"], "evidence": o["evidence"]}
+        if o["signal"] == "AGENT_OUTREACH":
+            try:
+                out["outreach"] = json.loads(o["value"])
+            except ValueError:
+                pass
+    out["has_any"] = bool(out["org_type"] or out["outreach"] or any(out[k] for k in ("materials", "volume", "people", "products", "buying_signals")))
     return out
 
 
@@ -53,6 +72,11 @@ def signals(db: DB, limit: int = 500) -> list[dict]:
                 d[k] = json.loads(d[k] or "[]")
             except ValueError:
                 d[k] = []
+        try:
+            d["agent"] = json.loads(d.get("agent") or "{}")
+        except ValueError:
+            d["agent"] = {}
+        d.pop("digest", None)
         d["first_seen"] = iso(d["first_seen"])
         out.append(d)
     return out

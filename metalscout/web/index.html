@@ -22,6 +22,7 @@
   <div class="kpi"><b id="kB">–</b><span>Tier B</span></div>
   <div class="kpi new"><b id="kNew">–</b><span>New today</span></div>
   <div class="kpi"><b id="kSig">–</b><span>Buyer signals</span></div>
+  <div class="kpi ai"><b id="kAI">–</b><span>AI-analysed leads</span></div>
   <div class="kpi"><b id="kQueue">–</b><span>Queued sites</span></div>
   <div class="kpi wide"><b id="kNext">–</b><span>Next daily run · <span id="kLast"></span></span></div>
 </section>
@@ -29,6 +30,7 @@
 <nav class="tabs">
   <button data-tab="leads" class="on">Leads</button>
   <button data-tab="signals">Buyer signals</button>
+  <button data-tab="agents">Agents</button>
   <button data-tab="runs">Runs &amp; log</button>
   <button data-tab="add">Add sites</button>
 </nav>
@@ -59,9 +61,21 @@
     </table>
   </section>
 
+  <section id="tab-agents" hidden>
+    <p class="muted">Each lead goes through a crew of agents, each on its own free model. The orchestrator is plain rules, so it costs nothing.
+      Every fact an agent reports must quote the company's own page; facts whose quote isn't on the page are <b>rejected</b> and never stored.</p>
+    <div id="agentCards" class="cards"></div>
+    <h3>Model providers</h3>
+    <div id="providers" class="chips"></div>
+    <p class="muted">Add a free key to switch a provider on: <code>GROQ_API_KEY</code>, <code>CEREBRAS_API_KEY</code>, <code>GEMINI_API_KEY</code>,
+      <code>OPENROUTER_API_KEY</code>, or run <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a> locally. The router tries them in order and falls back on rate limits.</p>
+    <h3>Calls by model</h3>
+    <table><thead><tr><th>Agent</th><th>Provider</th><th>Model</th><th>Calls</th><th>OK</th><th>Facts rejected</th><th>Avg time</th></tr></thead><tbody id="modelRows"></tbody></table>
+  </section>
+
   <section id="tab-runs" hidden>
     <table>
-      <thead><tr><th>Run</th><th>Trigger</th><th>Status</th><th>Queries</th><th>New companies</th><th>Profiled</th><th>Failed</th><th>Signals</th><th>Errors</th></tr></thead>
+      <thead><tr><th>Run</th><th>Trigger</th><th>Status</th><th>Queries</th><th>New companies</th><th>Profiled</th><th>Failed</th><th>Signals</th><th>AI facts / rejected</th><th>Errors</th></tr></thead>
       <tbody id="runRows"></tbody>
     </table>
     <h3>Log</h3>

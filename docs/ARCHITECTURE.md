@@ -1,7 +1,7 @@
 # Architecture
 
 ## Principles
-1. **Deterministic, no model.** Search, crawl, regex and a scoring formula. It runs forever at zero marginal cost.
+1. **Deterministic core, optional agents.** Search, crawl, regex and a scoring formula run with no model and at zero marginal cost. The agent crew (docs/AGENTS.md) is an extra stage on free models; every agent fact must quote the crawled page.
 2. **The database is the asset.** Facts are stored as *observations* `(company, signal, value, source_url, evidence, run_id, time)`. Leads are a *view* over them.
 3. **Stages chain through queries, not hand-offs.** PROFILE asks the DB "who is new or stale?" rather than taking a list from DISCOVER. A crashed run resumes by itself; re-profiling builds history.
 4. **A failure is an observation.** An unreachable site becomes `status=failed` plus an `UNREACHABLE` observation. A search ban becomes a run error. Nothing fails silently.
@@ -21,6 +21,7 @@ metalscout/
 ├── fit.py          observations → score, tier, reasons (computed on read)
 ├── leads.py        read model for UI and exports
 ├── engine.py       daily run: lock → stages → export → run record; logging
+├── agents/         optional crew: llm.py (free-model router), crew.py (orchestrator + agents), ground.py (quote check)
 ├── scheduler.py    in-app heartbeat + Windows Task Scheduler / cron
 ├── export.py       xlsx (5 tabs), csv, Google Sheets
 ├── server.py       stdlib HTTP JSON API + static files
@@ -30,7 +31,7 @@ metalscout/
 ## Run lifecycle
 ```
             ┌──────────── engine.run(trigger) ────────────┐
- Lock ─► start_run ─► DISCOVER ─► PROFILE ─► SIGNALS ─► EXPORT ─► finish_run(ok|partial|failed) ─► unlock
+ Lock ─► start_run ─► DISCOVER ─► PROFILE ─► SIGNALS ─► AGENTS ─► EXPORT ─► finish_run(ok|partial|failed) ─► unlock
                        │            │           │          │
                  kv.query_cursor  companies   buyer_     exports/leads_YYYY-MM-DD.xlsx
                  +40 queries      status=new  signals    leads_latest.xlsx/.csv, gsheet
@@ -71,6 +72,12 @@ Hits are routed as follows:
 - **OS level** (`schedule install`): Windows Task Scheduler with `-StartWhenAvailable` (catches up after sleep or shutdown) and `-MultipleInstances IgnoreNew`. On Linux/macOS, `schedule show` prints a cron line.
 - **App level** (`serve`): a heartbeat thread checks every 60 s and starts a run once the daily time has passed if none has run today.
 - The engine lock (`data/engine.lock`, stale after 6 h) makes both safe to enable together.
+
+## Storage backends
+`db.DB` uses SQLite (`data/metalscout.db`) unless `DATABASE_URL` is a Postgres URL (free Neon in the cloud). Postgres runs in autocommit, so reads never hold locks. Schema DDL runs only when `kv.schema_version` is older; `MIGRATIONS` add columns idempotently.
+
+## Deployment
+Local: `serve` + Task Scheduler. Cloud (docs/DEPLOY.md): GitHub Actions `engine.yml` runs the engine against Neon; Vercel serves `api/index.py` (the same handler) with `DASHBOARD_PASSWORD`, and "Find leads now" calls the GitHub `workflow_dispatch` API.
 
 ## Security
 - The dashboard binds to 127.0.0.1 and has no auth, so don't expose it. Static file serving is confined to `web/`.

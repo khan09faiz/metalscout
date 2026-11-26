@@ -1,4 +1,5 @@
-"""SQLite state. The database is the asset: every fact is an observation with its source URL.
+"""State: SQLite locally, or any Postgres (free Neon) when DATABASE_URL is set.
+The database is the asset: every fact is an observation with its source URL.
 
 Stages never hand lists to each other. Each stage *queries* for what needs doing, so a crashed
 run resumes by itself and re-profiling on a schedule turns facts into a time series.
@@ -6,12 +7,14 @@ run resumes by itself and re-profiling on a schedule turns facts into a time ser
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies(
   id INTEGER PRIMARY KEY, domain TEXT UNIQUE NOT NULL, website TEXT, name TEXT,
@@ -30,7 +33,71 @@ CREATE TABLE IF NOT EXISTS buyer_signals(
 CREATE TABLE IF NOT EXISTS runs(
   id TEXT PRIMARY KEY, trigger TEXT, started REAL, finished REAL, status TEXT, stats TEXT, errors TEXT);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS agent_runs(
+  id INTEGER PRIMARY KEY, run_id TEXT, company_id INTEGER, agent TEXT, provider TEXT, model TEXT,
+  ok INTEGER, latency_ms INTEGER, tokens INTEGER, rejected INTEGER DEFAULT 0, error TEXT, at REAL);
+CREATE INDEX IF NOT EXISTS ix_agent_runs ON agent_runs(run_id);
 """
+# columns added after v1 (ALTER TABLE ... ADD COLUMN, applied if missing)
+MIGRATIONS = [("companies", "digest", "TEXT DEFAULT ''"), ("companies", "agents_run", "TEXT DEFAULT ''"),
+              ("buyer_signals", "digest", "TEXT DEFAULT ''"), ("buyer_signals", "agent", "TEXT DEFAULT ''"),
+              ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0")]
+
+
+class Row(dict):
+    """Dict row that also supports positional access (r[0]), like sqlite3.Row."""
+    def __init__(self, names, values):
+        super().__init__(zip(names, values))
+        self._values = values
+
+    def __getitem__(self, k):
+        return self._values[k] if isinstance(k, int) else super().__getitem__(k)
+
+
+def _pg_sql(sql: str) -> str:
+    """Translate the small SQLite dialect used in this codebase to Postgres."""
+    s = sql.replace("?", "%s")
+    if re.match(r"\s*INSERT OR REPLACE INTO kv", s):
+        s = s.replace("INSERT OR REPLACE INTO", "INSERT INTO") + " ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value"
+    elif re.match(r"\s*INSERT OR IGNORE INTO", s):
+        s = s.replace("INSERT OR IGNORE INTO", "INSERT INTO", 1) + " ON CONFLICT DO NOTHING"
+    s = s.replace("INTEGER PRIMARY KEY", "BIGSERIAL PRIMARY KEY").replace(" REAL", " DOUBLE PRECISION")
+    return s
+
+
+class PgConn:
+    """Minimal sqlite3-connection lookalike over psycopg (execute / executemany / executescript / commit)."""
+    def __init__(self, url: str):
+        import psycopg
+        # autocommit: every statement is its own transaction, so reads never sit "idle in transaction"
+        # holding locks (which would block other connections, e.g. the dashboard during a run)
+        self.pg = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+
+    @staticmethod
+    def _factory(cur):
+        names = [c.name for c in cur.description] if cur.description else []
+        return lambda values: Row(names, values)
+
+    def execute(self, sql, params=()):
+        cur = self.pg.cursor(row_factory=self._factory)
+        cur.execute(_pg_sql(sql), tuple(params))
+        return cur
+
+    def executemany(self, sql, seq):
+        cur = self.pg.cursor()
+        cur.executemany(_pg_sql(sql), [tuple(x) for x in seq])
+        return cur
+
+    def executescript(self, script):
+        for stmt in [x.strip() for x in script.split(";")]:
+            if stmt:
+                self.pg.execute(_pg_sql(stmt))
+
+    def commit(self):
+        pass  # autocommit
+
+    def close(self):
+        self.pg.close()
 
 
 def now() -> float:
@@ -42,12 +109,42 @@ def iso(ts: float | None) -> str:
 
 
 class DB:
-    def __init__(self, path: str):
-        self.c = sqlite3.connect(path, timeout=30, check_same_thread=False)
-        self.c.row_factory = sqlite3.Row
-        self.c.execute("PRAGMA journal_mode=WAL")
+    """`path` is a SQLite file. If DATABASE_URL (postgres://...) is set it wins, so the same code runs
+    on a laptop (SQLite) and in GitHub Actions / Vercel (Neon Postgres)."""
+
+    def __init__(self, path: str, url: str | None = None):
+        url = url if url is not None else os.getenv("DATABASE_URL", "")
+        self.is_pg = url.startswith(("postgres://", "postgresql://"))
+        if self.is_pg:
+            self.c = PgConn(url)
+            # DDL only when the schema is missing or older; skips table locks on every dashboard request
+            try:
+                ver = self.c.execute("SELECT value FROM kv WHERE key='schema_version'").fetchone()
+                current = ver is not None and ver[0] == str(SCHEMA_VERSION)
+            except Exception:
+                current = False
+            if current:
+                return
+        else:
+            self.c = sqlite3.connect(path, timeout=30, check_same_thread=False)
+            self.c.row_factory = sqlite3.Row
+            self.c.execute("PRAGMA journal_mode=WAL")
         self.c.executescript(SCHEMA)
+        self._migrate()
         self.set("schema_version", str(SCHEMA_VERSION))
+
+    def _migrate(self) -> None:
+        for table, col, decl in MIGRATIONS:
+            if self.is_pg:
+                self.c.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {decl}")
+            else:
+                cols = [r[1] for r in self.c.execute(f"PRAGMA table_info({table})")]
+                if col not in cols:
+                    self.c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        self.c.commit()
+
+    def close(self) -> None:
+        self.c.close()
 
     # ---- kv
     def get(self, key: str, default: str = "") -> str:
@@ -142,3 +239,47 @@ class DB:
         q = f"SELECT * FROM runs WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY started DESC LIMIT 1"
         r = self.c.execute(q, statuses).fetchone()
         return dict(r) if r else None
+
+    def running_run(self, max_age_s: float = 6 * 3600) -> dict | None:
+        r = self.c.execute("SELECT * FROM runs WHERE status='running' AND started > ? ORDER BY started DESC LIMIT 1",
+                           (now() - max_age_s,)).fetchone()
+        return dict(r) if r else None
+
+    # ---- agents
+    def save_digest(self, company_id: int, digest: str) -> None:
+        self.c.execute("UPDATE companies SET digest=? WHERE id=?", (digest[:12000], company_id))
+        self.c.commit()
+
+    def companies_for_agents(self, limit: int) -> list:
+        """Profiled companies whose latest profile has not been through the agents yet."""
+        return self.c.execute(
+            "SELECT * FROM companies WHERE status='profiled' AND COALESCE(digest,'')<>'' "
+            "AND COALESCE(agents_run,'')<>COALESCE(last_profile_run,'') ORDER BY last_profiled DESC LIMIT ?", (limit,)).fetchall()
+
+    def signals_for_agents(self, limit: int) -> list:
+        return self.c.execute("SELECT * FROM buyer_signals WHERE COALESCE(agent_checked,0)=0 AND opened<>-1 "
+                              "ORDER BY intent DESC, first_seen DESC LIMIT ?", (limit,)).fetchall()
+
+    def add_observations(self, company_id: int, run_id: str, obs: list[dict]) -> None:
+        t = now()
+        self.c.executemany(
+            "INSERT INTO observations(company_id,run_id,signal,value,num,source_url,evidence,observed_at) VALUES(?,?,?,?,?,?,?,?)",
+            [(company_id, run_id, o["signal"], str(o.get("value", "")), o.get("num"), o.get("source_url", ""),
+              (o.get("evidence") or "")[:400], t) for o in obs])
+        self.c.commit()
+
+    def mark_agents_done(self, company_id: int, profile_run: str) -> None:
+        self.c.execute("UPDATE companies SET agents_run=? WHERE id=?", (profile_run, company_id))
+        self.c.commit()
+
+    def log_agent(self, run_id: str, company_id: int | None, agent: str, provider: str, model: str, ok: bool,
+                  latency_ms: int, tokens: int = 0, rejected: int = 0, error: str = "") -> None:
+        self.c.execute("INSERT INTO agent_runs(run_id,company_id,agent,provider,model,ok,latency_ms,tokens,rejected,error,at) "
+                       "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (run_id, company_id, agent, provider, model, int(ok), latency_ms, tokens, rejected, error[:300], now()))
+        self.c.commit()
+
+    def agent_stats(self, limit_runs: int = 10) -> list[dict]:
+        return [dict(r) for r in self.c.execute(
+            "SELECT agent, provider, model, COUNT(*) AS calls, SUM(ok) AS ok, SUM(rejected) AS rejected, "
+            "AVG(latency_ms) AS avg_ms FROM agent_runs GROUP BY agent, provider, model ORDER BY calls DESC LIMIT 50")]

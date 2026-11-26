@@ -1,11 +1,13 @@
 [project]
 name = "metalscout"
-version = "1.0.0"
+version = "1.1.0"
 description = "Find manufacturers and end users that buy raw metal (India). Deterministic daily pipeline + dashboard."
 requires-python = ">=3.10"
-dependencies = ["playwright>=1.45", "phonenumbers>=8.13", "selectolax>=0.3.21", "tldextract>=5", "pyyaml>=6", "ddgs>=9", "httpx>=0.25", "openpyxl>=3.1"]
+# core = dashboard + database (also what Vercel needs); [engine] adds the browser crawler and search
+dependencies = ["phonenumbers>=8.13", "tldextract>=5", "pyyaml>=6", "httpx>=0.25", "openpyxl>=3.1", "psycopg[binary]>=3.2"]
 
 [project.optional-dependencies]
+engine = ["playwright>=1.45", "selectolax>=0.3.21", "ddgs>=9"]
 sheets = ["gspread>=6"]
 dev = ["pytest>=8"]
 

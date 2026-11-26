@@ -1,10 +1,7 @@
-playwright>=1.45
+# Web dashboard + database (what Vercel installs). The crawler needs requirements-engine.txt too.
 phonenumbers>=8.13
-selectolax>=0.3.21
 tldextract>=5
 pyyaml>=6
-ddgs>=9
 httpx>=0.25
 openpyxl>=3.1
-# optional
-# gspread>=6
+psycopg[binary]>=3.2

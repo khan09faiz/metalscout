@@ -10,7 +10,7 @@ import httpx
 import tldextract
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-_tld = tldextract.TLDExtract(suffix_list_urls=())  # offline: bundled suffix list, no network at import
+_tld = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)  # offline bundled list; no cache writes (read-only hosts)
 
 
 def reg_domain(url: str) -> str:

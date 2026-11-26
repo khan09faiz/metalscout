@@ -1,0 +1,6 @@
+# Engine extras: browser crawler + search. Install with:  pip install -r requirements.txt -r requirements-engine.txt
+playwright>=1.45
+selectolax>=0.3.21
+ddgs>=9
+# optional: Google Sheets mirror
+# gspread>=6

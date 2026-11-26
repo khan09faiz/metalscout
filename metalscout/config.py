@@ -31,6 +31,9 @@ DEFAULTS: dict = {
     "export": {"dir": "exports", "keep_days": 30, "gsheet_id": "", "gsheet_creds": ""},
     "web": {"host": "127.0.0.1", "port": 8000},
     "compliance": {"do_not_contact": []},
+    "agents": {"enabled": True, "order": ["groq", "cerebras", "gemini", "openrouter", "ollama"],
+               "companies_per_run": 40, "signals_per_run": 30, "max_calls_per_run": 150, "timeout_s": 60,
+               "min_confidence": 0.7, "write_for_tiers": ["A", "B"], "providers": {}},
 }
 
 
@@ -47,10 +50,12 @@ def load(path: str | Path | None = None) -> dict:
     cfg = _merge(DEFAULTS, data or {})
     cfg["_path"] = str(p)
     cfg["_home"] = str(p.parent if p.exists() else HOME)
+    # where runtime files go (db, logs, exports); /tmp on read-only hosts like Vercel
+    cfg["_data"] = os.getenv("METALSCOUT_DATA_DIR", cfg["_home"])
     return cfg
 
 
 def path(cfg: dict, *parts: str) -> Path:
-    p = Path(cfg["_home"]).joinpath(*parts)
+    p = Path(cfg.get("_data") or cfg["_home"]).joinpath(*parts)
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
