@@ -41,9 +41,15 @@ agents:
   max_calls_per_run: 150     # hard budget across all agents
   min_confidence: 0.7        # Sorter verdict needed to override the regex classifier
   write_for_tiers: [A, B]
+  analyst_max_chars: 12000   # page text the Analyst reads; use ~4000 for CPU-only Ollama
   providers:                 # optional overrides
     groq: {rpm: 20, large: ["gpt-oss-120b", "llama-3.3-70b"]}
 ```
+
+## Measured on real sites (local test, Nov 2026)
+- `llama3.2:1b` (Ollama, CPU) as Analyst: 24 of 25 facts **rejected**, because it paraphrases instead of quoting. That's why models of 3B or smaller are never used for the large tier.
+- `mistral:7b` (Ollama, CPU) as Writer: about 1 min, a good grounded email ("Matching Metals for Your 9000 MT/Year Production"). As Analyst on a 12k-character digest it timed out after 10 min on CPU; set `analyst_max_chars: 4000` or use a cloud free tier.
+- Cloud free tiers (Groq, Cerebras) answer in seconds, so use them for scheduled runs.
 
 ## Editing agents
 Prompts are Markdown in `prompts/agents/` (`sorter.md`, `analyst.md`, `writer.md`, `scout.md`). Change wording, add fields or tighten rules there. To add an agent, write a prompt and add one branch in `agents/crew.py: Crew.run_company`.

@@ -101,7 +101,8 @@ class Crew:
 
         # 2. Analyst: anyone who might consume metal
         if org in ("manufacturer", "both", "unknown"):
-            res = self._call("analyst", "large", f"WEBSITE TEXT:\n{digest}", cid, max_tokens=1500)
+            text = digest[: self.ac.get("analyst_max_chars", 12000)]
+            res = self._call("analyst", "large", f"WEBSITE TEXT:\n{text}", cid, max_tokens=1500)
             if res and res.data:
                 d, r0 = res.data, rejected
                 for items, signal, vf, nf in (
