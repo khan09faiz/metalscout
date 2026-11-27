@@ -140,6 +140,15 @@ def make_handler(cfg: dict):
             self._send(401, {"error": "login required"}, headers={"WWW-Authenticate": 'Basic realm="MetalScout"'})
             return False
 
+        def _route(self):
+            """(path, query) of the request. On Vercel every URL is rewritten to /api/index?__path=<original>."""
+            u = urlparse(self.path)
+            qs = parse_qs(u.query)
+            path = qs.pop("__path", [u.path])[0] or "/"
+            if path in ("/api/index", "/api/index.py"):
+                path = "/"
+            return path, qs
+
         def _body(self) -> dict:
             n = int(self.headers.get("Content-Length") or 0)
             try:
@@ -150,29 +159,28 @@ def make_handler(cfg: dict):
         def do_GET(self):
             if not self._authed():
                 return
-            u = urlparse(self.path)
-            qs = parse_qs(u.query)
-            if not u.path.startswith("/api/"):
-                f = (WEB / ("index.html" if u.path in ("/", "") else u.path.lstrip("/"))).resolve()
+            route, qs = self._route()
+            if not route.startswith("/api/"):
+                f = (WEB / ("index.html" if route in ("/", "") else route.lstrip("/"))).resolve()
                 if f.is_file() and WEB.resolve() in f.parents:
                     return self._send(200, f.read_bytes(), mimetypes.guess_type(f.name)[0] or "application/octet-stream")
                 return self._send(404, {"error": "not found"})
             db = None
             try:
                 db = open_db(cfg)
-                if u.path == "/api/status":
+                if route == "/api/status":
                     return self._send(200, status(cfg, db))
-                if u.path == "/api/leads":
+                if route == "/api/leads":
                     return self._send(200, L.build(db, cfg, include_traders=qs.get("all") == ["1"]))
-                if u.path == "/api/signals":
+                if route == "/api/signals":
                     return self._send(200, L.signals(db))
-                if u.path == "/api/runs":
+                if route == "/api/runs":
                     return self._send(200, db.runs(30))
-                if u.path == "/api/agents":
+                if route == "/api/agents":
                     return self._send(200, agents_view(db))
-                if u.path == "/api/log":
+                if route == "/api/log":
                     return self._send(200, tail_log(cfg))
-                if u.path == "/api/export":
+                if route == "/api/export":
                     out = export.write_xlsx(db, cfg, path(cfg, cfg["export"]["dir"], "leads_download.xlsx"))
                     return self._send(200, out.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                       {"Content-Disposition": "attachment; filename=metalscout_leads.xlsx"})
@@ -186,18 +194,18 @@ def make_handler(cfg: dict):
         def do_POST(self):
             if not self._authed():
                 return
-            u = urlparse(self.path)
+            route, _ = self._route()
             b = self._body()
             db = None
             try:
                 db = open_db(cfg)
-                if u.path == "/api/run":
+                if route == "/api/run":
                     code, body = start_run(cfg, db, str(b.get("stages") or ""))
                     return self._send(code, body)
-                if u.path.startswith("/api/lead/"):
-                    db.update_company(int(u.path.rsplit("/", 1)[1]), **{k: b[k] for k in ("stage", "notes") if k in b})
+                if route.startswith("/api/lead/"):
+                    db.update_company(int(route.rsplit("/", 1)[1]), **{k: b[k] for k in ("stage", "notes") if k in b})
                     return self._send(200, {"ok": True})
-                if u.path == "/api/add":
+                if route == "/api/add":
                     added = 0
                     for url in b.get("urls", []):
                         url = str(url).strip()
