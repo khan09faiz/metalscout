@@ -171,3 +171,17 @@ def test_retired_model_falls_back_to_working_one(cfg, monkeypatch):
         assert seen == ["mistral:7b", "llama3.1:8b", "llama3.1:8b"]  # the 404 model is not retried
     finally:
         srv.shutdown()
+
+
+def test_failed_call_is_retried_and_redo_resets(site, cfg, llm):
+    db = engine.open_db(cfg)
+    db.add_company(reg_domain(site), site, "test", "manual")
+    llm["fail"] = 100  # every model call rate-limited
+    res = engine.run(cfg, "test", stages=("profile", "agents"))
+    assert res["stats"].get("agent_retry_later") == 1 and res["stats"]["agent_companies"] == 0
+    assert len(db.companies_for_agents(10)) == 1  # not marked done -> retried next run
+    llm["fail"] = 0
+    engine.run(cfg, "test", stages=("agents",))
+    assert leads.build(db, cfg)[0]["ai"]["has_any"]
+    engine.run(cfg, "test", stages=("redo-agents",))
+    assert not leads.build(db, cfg)[0]["ai"]["has_any"] and len(db.companies_for_agents(10)) == 1

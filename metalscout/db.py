@@ -269,6 +269,13 @@ class DB:
               (o.get("evidence") or "")[:400], t) for o in obs])
         self.c.commit()
 
+    def reset_agents(self) -> None:
+        """Forget all agent output so the crew re-analyses everything on the next 'agents' stage."""
+        self.c.execute("DELETE FROM observations WHERE substr(signal, 1, 6) = 'AGENT_'")
+        self.c.execute("UPDATE companies SET agents_run = ''")
+        self.c.execute("UPDATE buyer_signals SET agent_checked = 0, agent = ''")
+        self.c.commit()
+
     def mark_agents_done(self, company_id: int, profile_run: str) -> None:
         self.c.execute("UPDATE companies SET agents_run=? WHERE id=?", (profile_run, company_id))
         self.c.commit()

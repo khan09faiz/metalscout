@@ -145,6 +145,9 @@ def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "sign
                     asyncio.run(stage_profile(db, cfg, rid, stats, errors, profile_limit))
                 elif st == "signals":
                     asyncio.run(stage_signals(db, cfg, stats, errors))
+                elif st == "redo-agents":
+                    db.reset_agents()
+                    stats["agents_reset"] = True
                 elif st == "agents":
                     from .agents.crew import Crew
                     ac = cfg.get("agents", {})

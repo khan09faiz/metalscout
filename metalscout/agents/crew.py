@@ -51,6 +51,7 @@ class Crew:
         except Exception as e:
             self.db.log_agent(self.run_id, company_id, agent, "", "", False, int((time.time() - t0) * 1000), error=str(e))
             self.errors.append(f"agent {agent}: {str(e)[:160]}")
+            self._failed = True
             return None
         self.stats["agent_calls"] += 1
         return res
@@ -79,6 +80,7 @@ class Crew:
         det_org = (sig("ORG_TYPE") or [{"value": "unknown"}])[0]["value"]
         mixed = bool(sig("MANUFACTURER_PHRASE")) and bool(sig("TRADER_PHRASE"))
         new: list[dict] = []
+        self._failed = False
         rejected = 0
         org = det_org
 
@@ -135,6 +137,11 @@ class Crew:
                             "body": res.data["body"]}, ensure_ascii=False), "source_url": "", "evidence": "draft, not sent"})
                 self.db.log_agent(self.run_id, cid, "writer", res.provider, res.model, True, res.latency_ms, res.tokens)
 
+        if self._failed:
+            # a model call failed (rate limit, retired model, outage): store nothing, retry next run
+            self.stats["agent_retry_later"] = self.stats.get("agent_retry_later", 0) + 1
+            log.info("agents %-30s a call failed; will retry next run", c["domain"])
+            return
         self.db.add_observations(cid, prun, new)
         self.db.mark_agents_done(cid, prun)
         self.stats["agent_companies"] += 1
