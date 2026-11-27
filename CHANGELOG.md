@@ -19,6 +19,10 @@
 - `pipeline.keep_profile_runs` (default 3): older profile runs' observations, agent facts included, are deleted after each profile
 - Postgres `connect_timeout=10`; DEPLOY.md says to use Neon's pooled (`-pooler`) string on Vercel
 - New companies are crawled from their homepage; the search-hit or pasted URL is kept in `source`
+### Robustness
+- Runs beat a heartbeat (`runs.heartbeat`, schema v4); a `running` run silent for 20 minutes no longer blocks new runs or shows as running. New `mark-failed` command, run by `engine.yml` when the job fails or is cancelled
+- Run status: `ok` = no stage failed, `partial` = some, `failed` = all. Per-site / per-signal / per-call problems are capped `warnings` in stats (shown on the Runs tab), not `errors`. A discover stage in which every search failed counts as a failed stage
+- `schedule show` quotes paths in the cron line; the fit score gives a "phone" reason; a do-not-contact domain also blocks emails at that domain or its subdomains
 ### Packaging
 - `metalscout.agents` is now in non-editable installs (`packages.find`), and the agent prompts moved to `metalscout/prompts/agents/` as package data. `prompts/master_prompt.md` stays where it was
 

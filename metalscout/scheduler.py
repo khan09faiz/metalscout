@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import threading
@@ -93,4 +94,5 @@ def remove_windows_task() -> str:
 
 def cron_line(cfg: dict) -> str:
     h, m = _at(cfg)
-    return f"{m} {h} * * * cd {cfg['_home']} && {sys.executable} -m metalscout run --trigger schedule >> logs/cron.log 2>&1"
+    q = shlex.quote
+    return f"{m} {h} * * * cd {q(cfg['_home'])} && {q(sys.executable)} -m metalscout run --trigger schedule >> logs/cron.log 2>&1"

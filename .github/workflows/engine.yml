@@ -57,6 +57,11 @@ jobs:
             exit 1
           fi
           python -m metalscout --config metalscout.cloud.yaml run --trigger "$TRIGGER" --stages "$STAGES"
+      - name: Mark the run failed
+        # a crash, timeout or cancel leaves the run 'running' in the database; close it so the dashboard doesn't wait on it
+        if: failure() || cancelled()
+        continue-on-error: true
+        run: python -m metalscout --config metalscout.cloud.yaml mark-failed
       - name: Keep the Excel export
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

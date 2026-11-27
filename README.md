@@ -50,6 +50,7 @@ python -m metalscout add https://somecompany.in ...      # queue your own sites
 python -m metalscout import tenders.csv                  # GeM/CPPP/trade-show exports (columns: website and/or url, title)
 python -m metalscout export [--out file.xlsx]
 python -m metalscout status
+python -m metalscout mark-failed                         # close a run left 'running' by a crash
 python -m metalscout schedule install|remove|show
 ```
 

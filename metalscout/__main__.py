@@ -8,6 +8,7 @@
   python -m metalscout import FILE.csv      import tender/trade-show/marketplace exports
   python -m metalscout export [--out F]     write the Excel sheet now
   python -m metalscout status               counts, last run, next run
+  python -m metalscout mark-failed          mark the latest 'running' run as failed (CI cleanup after a crash/cancel)
   python -m metalscout schedule install|remove|show
 """
 from __future__ import annotations
@@ -48,6 +49,7 @@ def main(argv=None):
     e = s.add_parser("export")
     e.add_argument("--out")
     s.add_parser("status")
+    s.add_parser("mark-failed")
     sc = s.add_parser("schedule")
     sc.add_argument("action", choices=["install", "remove", "show"])
     args = p.parse_args(argv)
@@ -96,6 +98,10 @@ def main(argv=None):
         from .engine import open_db
         from .server import status
         print(json.dumps(status(cfg, open_db(cfg)), indent=2, default=str))
+    if args.cmd == "mark-failed":
+        from .engine import open_db
+        rid = open_db(cfg).mark_running_failed("run: marked failed (the process crashed, timed out or was cancelled)")
+        print(f"marked run {rid} as failed" if rid else "no running run")
     if args.cmd == "schedule":
         from . import scheduler
         if args.action == "show":

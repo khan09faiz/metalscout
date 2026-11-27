@@ -18,8 +18,12 @@ from __future__ import annotations
 
 
 def _dnc(domain: str, emails: list[str], dnc: list[str]) -> bool:
+    """A do-not-contact entry is an email (exact match) or a domain: it matches the company's domain or
+    subdomains, and any email at that domain or a subdomain of it."""
     pats = [p.lower().strip() for p in dnc if p.strip()]
-    return any(p == domain or domain.endswith("." + p) or p in emails for p in pats)
+    emails = [str(e).lower() for e in emails]
+    return any(p == domain or domain.endswith("." + p) or p in emails
+               or ("@" not in p and any(e.endswith("@" + p) or e.endswith("." + p) for e in emails)) for p in pats)
 
 
 def score(company: dict, obs: list[dict], cfg: dict) -> dict:
@@ -61,6 +65,8 @@ def score(company: dict, obs: list[dict], cfg: dict) -> dict:
         s += int(w["email"] * 2 / 3); why.append("email (other domain)")
     if sig.get("PHONE"):
         s += w["phone"]
+        if w["phone"]:
+            why.append("phone")
     if any(sig.get(k) for k in ("GSTIN", "CIN", "UDYAM", "IEC")):
         s += w["registration"]; why.append("registration no. printed")
     if sig.get("VENDOR_PAGE") or sig.get("BUYER_INTENT") or sig.get("AGENT_BUYING_SIGNAL"):

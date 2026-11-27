@@ -35,8 +35,9 @@ def prompt(name: str) -> str:
 
 
 class Crew:
-    def __init__(self, db: DB, cfg: dict, run_id: str, stats: dict, errors: list[str], router: Router | None = None):
-        self.db, self.cfg, self.run_id, self.stats, self.errors = db, cfg, run_id, stats, errors
+    def __init__(self, db: DB, cfg: dict, run_id: str, stats: dict, warnings: list[str], router: Router | None = None):
+        """`warnings` collects failed model calls; they are run warnings, not stage errors."""
+        self.db, self.cfg, self.run_id, self.stats, self.warnings = db, cfg, run_id, stats, warnings
         self.router = router or Router(cfg)
         self.ac = cfg.get("agents", {})
         self._failed = False
@@ -52,7 +53,7 @@ class Crew:
             raise
         except Exception as e:
             self.db.log_agent(self.run_id, company_id, agent, "", "", False, int((time.time() - t0) * 1000), error=str(e))
-            self.errors.append(f"agent {agent}: {str(e)[:160]}")
+            self.warnings.append(f"agent {agent}: {str(e)[:160]}")
             self._failed = True
             return None
         self.stats["agent_calls"] += 1
@@ -202,8 +203,10 @@ class Crew:
         try:
             tries = int(self.ac.get("max_attempts", 3))
             for c in self.db.companies_for_agents(company_limit, tries):
+                self.db.heartbeat(self.run_id)
                 self.run_company(c)
             for s in self.db.signals_for_agents(signal_limit, tries):
+                self.db.heartbeat(self.run_id)
                 self.run_signal(s)
         except BudgetExceeded as e:
             self.stats["agents_note"] = str(e)

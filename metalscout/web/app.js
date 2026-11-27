@@ -157,6 +157,15 @@ async function loadAgents() {
     '<tr><td colspan="7" class="empty">No agent calls yet.</td></tr>';
 }
 
+// per-site / per-signal problems: a count, with the first few in a tooltip and inline
+function warnCell(s) {
+  const w = Array.isArray(s.warnings) ? s.warnings : [];
+  const total = s.warnings_total ?? w.length;
+  if (!total) return "–";
+  return `<span title="${esc(w.join("\n"))}">${esc(total)} warning${total === 1 ? "" : "s"}</span>` +
+    (w.length ? `<br>${esc(w.slice(0, 2).join(" | "))}${total > 2 ? " …" : ""}` : "");
+}
+
 async function loadRuns() {
   const runs = await api("/api/runs");
   $("#runRows").innerHTML = runs.map((r) => {
@@ -164,8 +173,9 @@ async function loadRuns() {
     return `<tr><td>${esc(r.id)}</td><td>${esc(r.trigger)}</td><td>${esc(r.status)}</td><td>${s.queries ?? "–"}</td><td>${s.new_companies ?? "–"}</td>
       <td>${s.profiled ?? "–"}</td><td>${s.profile_failed ?? "–"}</td><td>${s.new_signals ?? "–"}</td>
       <td>${s.agent_facts ?? "–"} / ${s.agent_rejected ?? "–"}</td>
-      <td class="muted">${esc((r.errors || []).slice(0, 3).join(" | "))}</td></tr>`;
-  }).join("") || '<tr><td colspan="10" class="empty">No runs yet.</td></tr>';
+      <td class="muted">${esc((r.errors || []).slice(0, 3).join(" | "))}</td>
+      <td class="muted">${warnCell(s)}</td></tr>`;
+  }).join("") || '<tr><td colspan="11" class="empty">No runs yet.</td></tr>';
   $("#log").textContent = (await api("/api/log")).join("");
 }
 

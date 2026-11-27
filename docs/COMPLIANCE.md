@@ -6,7 +6,7 @@
 - **Never opens** hosts whose terms forbid automated access or which actively litigate scraping: IndiaMART (terms bar "systematic retrieval" by robots), LinkedIn (Proxycurl injunction, hiQ settlement), Facebook, Instagram, X, JustDial, Alibaba. It keeps only the search-engine snippet.
 - Collects **business contact data published by the business itself** and records the source URL, so you can show where you got it.
 - Never guesses or SMTP-probes email addresses.
-- Has a do-not-contact list (`compliance.do_not_contact`) that zeroes a company's score.
+- Has a do-not-contact list (`compliance.do_not_contact`) that zeroes a company's score. An entry is an email address or a domain; a domain entry matches that company's site and subdomains, and any email at that domain or its subdomains wherever it was found.
 
 ## Your obligations when you use the leads
 | Rule | What it means in practice |

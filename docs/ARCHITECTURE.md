@@ -4,13 +4,13 @@
 1. **Deterministic core, optional agents.** Search, crawl, regex and a scoring formula run with no model and at zero marginal cost. The agent crew (docs/AGENTS.md) is an extra stage on free models; every agent fact must quote the crawled page.
 2. **The database is the asset.** Facts are stored as *observations* `(company, signal, value, source_url, evidence, run_id, time)`. Leads are a *view* over them.
 3. **Stages chain through queries, not hand-offs.** PROFILE asks the DB "who is new or stale?" rather than taking a list from DISCOVER. A crashed run resumes by itself; re-profiling builds history.
-4. **A failure is an observation.** An unreachable site becomes `status=failed` plus an `UNREACHABLE` observation. A search ban becomes a run error. Nothing fails silently.
+4. **A failure is an observation.** An unreachable site becomes `status=failed` plus an `UNREACHABLE` observation and a run *warning*. A stage that throws (or a discover stage where every search failed) becomes a run *error*. Nothing fails silently.
 5. **Never invent.** Only values printed on a page are stored. Empty beats wrong.
 
 ## Layout
 ```
 metalscout/
-├── __main__.py     CLI (init, run, serve, add, import, export, status, schedule)
+├── __main__.py     CLI (init, run, serve, add, import, export, status, schedule, mark-failed)
 ├── config.py       YAML over defaults
 ├── db.py           SQLite schema + queries (companies, observations, buyer_signals, runs, kv)
 ├── net.py          domain helpers, public-host SSRF guard, robots.txt cache
@@ -41,13 +41,16 @@ metalscout/
 ```
 Each stage is wrapped in its own try/except, so a failed stage doesn't stop the others.
 
+- **Status:** `ok` = no stage failed, `partial` = some stages failed, `failed` = every stage failed. `runs.errors` holds only stage-level exceptions. Per-site, per-signal and per-model-call problems go to `stats.warnings` (first 50 kept, `stats.warnings_total` counts all), alongside the existing counters (`profile_failed`, `agent_retry_later`, …). The Runs tab shows both.
+- **Heartbeat:** the run updates `runs.heartbeat` whenever it saves stats and on every search query, buyer-signal page and agent item. A `running` run with no heartbeat for 20 minutes counts as dead: it stops blocking new runs and the dashboard stops showing "running". In GitHub Actions, a failed, timed-out or cancelled job runs `python -m metalscout mark-failed`, which closes the latest `running` run as `failed`.
+
 ## Data model
 | Table | Key columns | Notes |
 |---|---|---|
 | `companies` | domain (unique), website (the homepage, `scheme://host/`), name, status, stage, found_via (the query), source (`search:<hit URL>` / `manual:<URL>` / `csv`), last_profile_run, agents_run, agent_attempts | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
 | `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only per run; latest run per company is the current view. After each profile, runs older than the company's last `pipeline.keep_profile_runs` (default 3) are deleted, their `AGENT_*` facts included |
 | `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened, agent_checked, agent_attempts | marketplace/tender/social/csv |
-| `runs` | id, trigger, started, finished, status, stats(json), errors(json) | powers the Runs tab and "ran today?" |
+| `runs` | id, trigger, started, heartbeat, finished, status, stats(json, incl. warnings), errors(json, stage-level only) | powers the Runs tab and "ran today?" |
 | `kv` | query_cursor, query_total, schema_version | |
 
 ## Discovery query space
@@ -71,7 +74,7 @@ Hits are routed as follows:
 `leads.build()` reads the shown companies and their latest-profile observations in **two queries**: one for the companies, one join `observations ⋈ companies ON company_id AND run_id = last_profile_run` (served by `ix_obs`), grouped in Python. `leads.summary()` uses the same two queries for the dashboard's counts, so `/api/status` (polled every 5 s) never builds every lead.
 
 ## Scoring
-`fit.score()` runs on every read, so editing weights in YAML re-ranks instantly. Traders are capped at 15. A do-not-contact match scores 0 and gets tier X.
+`fit.score()` runs on every read, so editing weights in YAML re-ranks instantly. Traders are capped at 15. A do-not-contact match (the domain, a subdomain, an email, or an email at a listed domain) scores 0 and gets tier X.
 
 ## Scheduling
 - **OS level** (`schedule install`): Windows Task Scheduler with `-StartWhenAvailable` (catches up after sleep or shutdown) and `-MultipleInstances IgnoreNew`. On Linux/macOS, `schedule show` prints a cron line.

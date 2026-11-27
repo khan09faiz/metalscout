@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies(
   id INTEGER PRIMARY KEY, domain TEXT UNIQUE NOT NULL, website TEXT, name TEXT,
@@ -42,7 +42,9 @@ CREATE INDEX IF NOT EXISTS ix_agent_runs ON agent_runs(run_id);
 MIGRATIONS = [("companies", "digest", "TEXT DEFAULT ''"), ("companies", "agents_run", "TEXT DEFAULT ''"),
               ("buyer_signals", "digest", "TEXT DEFAULT ''"), ("buyer_signals", "agent", "TEXT DEFAULT ''"),
               ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0"),
-              ("companies", "agent_attempts", "INTEGER DEFAULT 0"), ("buyer_signals", "agent_attempts", "INTEGER DEFAULT 0")]
+              ("companies", "agent_attempts", "INTEGER DEFAULT 0"), ("buyer_signals", "agent_attempts", "INTEGER DEFAULT 0"),
+              ("runs", "heartbeat", "REAL")]
+RUN_STALE_S = 20 * 60  # a 'running' run with no heartbeat for this long is treated as dead
 
 
 class Row(dict):
@@ -233,8 +235,9 @@ class DB:
     # ---- runs
     def start_run(self, trigger: str) -> str:
         rid = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-        self.c.execute("INSERT INTO runs(id,trigger,started,status,stats,errors) VALUES(?,?,?,?,?,?)",
-                       (rid, trigger, now(), "running", "{}", "[]"))
+        t = now()
+        self.c.execute("INSERT INTO runs(id,trigger,started,heartbeat,status,stats,errors) VALUES(?,?,?,?,?,?,?)",
+                       (rid, trigger, t, t, "running", "{}", "[]"))
         self.c.commit()
         return rid
 
@@ -244,8 +247,23 @@ class DB:
         self.c.commit()
 
     def update_run_stats(self, rid: str, stats: dict) -> None:
-        self.c.execute("UPDATE runs SET stats=? WHERE id=?", (json.dumps(stats), rid))
+        self.c.execute("UPDATE runs SET stats=?, heartbeat=? WHERE id=?", (json.dumps(stats), now(), rid))
         self.c.commit()
+
+    def heartbeat(self, rid: str) -> None:
+        """Tell the dashboard (and the next run) that this run is still alive."""
+        self.c.execute("UPDATE runs SET heartbeat=? WHERE id=?", (now(), rid))
+        self.c.commit()
+
+    def mark_running_failed(self, reason: str) -> str | None:
+        """Mark the latest 'running' run as failed (the process died or was cancelled). Returns its id."""
+        r = self.c.execute("SELECT id, errors FROM runs WHERE status='running' ORDER BY started DESC LIMIT 1").fetchone()
+        if not r:
+            return None
+        errors = json.loads(r["errors"] or "[]") + [reason]
+        self.c.execute("UPDATE runs SET status='failed', finished=?, errors=? WHERE id=?", (now(), json.dumps(errors[-50:]), r["id"]))
+        self.c.commit()
+        return r["id"]
 
     def runs(self, limit: int = 30) -> list[dict]:
         out = []
@@ -260,9 +278,11 @@ class DB:
         r = self.c.execute(q, statuses).fetchone()
         return dict(r) if r else None
 
-    def running_run(self, max_age_s: float = 6 * 3600) -> dict | None:
-        r = self.c.execute("SELECT * FROM runs WHERE status='running' AND started > ? ORDER BY started DESC LIMIT 1",
-                           (now() - max_age_s,)).fetchone()
+    def running_run(self, stale_s: float = RUN_STALE_S) -> dict | None:
+        """The active run, if any: status 'running' and a heartbeat within `stale_s` (a crashed or cancelled
+        run stops beating, so it stops blocking new runs and the dashboard's "running" state)."""
+        r = self.c.execute("SELECT * FROM runs WHERE status='running' AND COALESCE(heartbeat, started) > ? "
+                           "ORDER BY started DESC LIMIT 1", (now() - stale_s,)).fetchone()
         return dict(r) if r else None
 
     # ---- agents
