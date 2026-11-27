@@ -27,7 +27,8 @@ PROVIDERS: dict[str, dict] = {
     "groq": {"base": "https://api.groq.com/openai/v1", "key_env": "GROQ_API_KEY", "rpm": 25,
              "small": ["llama-3.1-8b", "gpt-oss-20b", "llama"], "large": ["llama-3.3-70b", "gpt-oss-120b", "qwen", "llama"]},
     "gemini": {"base": "https://generativelanguage.googleapis.com/v1beta/openai", "key_env": "GEMINI_API_KEY", "rpm": 8,
-               "small": ["flash-lite", "flash"], "large": ["flash", "gemma"]},
+               "small": ["gemini-flash-lite-latest", "flash-lite", "flash"],
+               "large": ["gemini-flash-latest", "flash-latest", "gemini-pro-latest", "flash", "gemma"]},
     "cerebras": {"base": "https://api.cerebras.ai/v1", "key_env": "CEREBRAS_API_KEY", "rpm": 25,
                  "small": ["llama3.1-8b", "llama"], "large": ["llama-3.3-70b", "gpt-oss-120b", "qwen", "llama"]},
     "openrouter": {"base": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "rpm": 15,
@@ -60,10 +61,13 @@ class Provider:
     models: list[str] = field(default_factory=list)
     last_call: float = 0.0
     cooldown_until: float = 0.0
+    bad: set = field(default_factory=set)
 
     def pick(self, tier: str) -> str | None:
         for pat in self.patterns.get(tier, []):
             for m in self.models:
+                if m in self.bad:
+                    continue
                 if pat.lower() in m.lower() and not (tier == "large" and TINY_MODEL.search(m)):
                     return m
         return None
@@ -131,43 +135,71 @@ class Router:
         p.last_call = time.time()
 
     def complete(self, tier: str, system: str, user: str, want_json: bool = True, max_tokens: int = 1200) -> Result:
+        """Try providers in order; within a provider try the tier's model, then the other tier's.
+        A model that answers 400/404/422 is marked bad for the rest of the run (retired or not on this
+        key's free tier). 402/403/429/5xx put the whole provider on cooldown."""
         if self.calls >= self.max_calls:
             raise BudgetExceeded(f"agent call budget ({self.max_calls}) used up")
-        errors = []
+        errors: list[str] = []
+        other = "large" if tier == "small" else "small"
         for p in self.providers:
-            model = p.pick(tier) or p.pick("large" if tier == "small" else "small")
-            if not model or time.time() < p.cooldown_until:
+            if time.time() < p.cooldown_until:
                 continue
-            body = {"model": model, "temperature": 0.1, "max_tokens": max_tokens,
-                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-            if want_json:
-                body["response_format"] = {"type": "json_object"}
-            for attempt in range(2):
-                self._throttle(p)
-                self.calls += 1
-                t0 = time.time()
-                try:
-                    r = httpx.post(f"{p.base}/chat/completions", headers=self._headers(p), json=body, timeout=self.timeout)
-                    if r.status_code == 400 and want_json and "response_format" in body:
-                        body.pop("response_format")  # some free models reject JSON mode; rely on the prompt
-                        continue
-                    if r.status_code in (402, 403, 429) or r.status_code >= 500:
-                        p.cooldown_until = time.time() + (60 if r.status_code == 429 else 300)
-                        errors.append(f"{p.name}:{r.status_code}")
-                        break
-                    r.raise_for_status()
-                    j = r.json()
-                    text = (j["choices"][0]["message"].get("content") or "").strip()
-                    data = parse_json(text) if want_json else None
-                    if want_json and data is None:
-                        errors.append(f"{p.name}:bad-json")
-                        continue
-                    tokens = (j.get("usage") or {}).get("total_tokens", 0) or 0
-                    return Result(text, data, p.name, model, int(tokens), int((time.time() - t0) * 1000))
-                except (httpx.HTTPError, KeyError, ValueError) as e:
-                    errors.append(f"{p.name}:{type(e).__name__}")
+            tried: set[str] = set()
+            while True:
+                model = p.pick(tier) or p.pick(other)
+                if not model or model in tried:
+                    break
+                tried.add(model)
+                res, provider_down = self._try(p, model, system, user, want_json, max_tokens, errors)
+                if res:
+                    return res
+                if provider_down:
                     break
         raise RuntimeError("all providers failed: " + ", ".join(errors[-6:]) if errors else "no provider available")
+
+    def _try(self, p: Provider, model: str, system: str, user: str, want_json: bool, max_tokens: int,
+             errors: list[str]) -> tuple[Result | None, bool]:
+        body = {"model": model, "temperature": 0.1, "max_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        if want_json:
+            body["response_format"] = {"type": "json_object"}
+        for _ in range(3):
+            if self.calls >= self.max_calls:
+                raise BudgetExceeded(f"agent call budget ({self.max_calls}) used up")
+            self._throttle(p)
+            self.calls += 1
+            t0 = time.time()
+            try:
+                r = httpx.post(f"{p.base}/chat/completions", headers=self._headers(p), json=body, timeout=self.timeout)
+            except httpx.HTTPError as e:
+                errors.append(f"{p.name}/{model}:{type(e).__name__}")
+                return None, False
+            if r.status_code == 400 and want_json and "response_format" in body:
+                body.pop("response_format")  # some free models reject JSON mode; rely on the prompt
+                continue
+            if r.status_code in (402, 403, 429) or r.status_code >= 500:
+                p.cooldown_until = time.time() + (60 if r.status_code == 429 else 300)
+                errors.append(f"{p.name}:{r.status_code}")
+                return None, True
+            if r.status_code >= 400:
+                p.bad.add(model)
+                log.info("agents: %s/%s returned %s, skipping this model: %s", p.name, model, r.status_code, r.text[:160])
+                errors.append(f"{p.name}/{model}:{r.status_code}")
+                return None, False
+            try:
+                j = r.json()
+                text = (j["choices"][0]["message"].get("content") or "").strip()
+            except (KeyError, IndexError, ValueError, TypeError):
+                errors.append(f"{p.name}/{model}:bad-response")
+                continue
+            data = parse_json(text) if want_json else None
+            if want_json and data is None:
+                errors.append(f"{p.name}/{model}:bad-json")
+                continue
+            tokens = (j.get("usage") or {}).get("total_tokens", 0) or 0
+            return Result(text, data, p.name, model, int(tokens), int((time.time() - t0) * 1000)), False
+        return None, False
 
 
 def parse_json(text: str) -> dict | None:

@@ -130,3 +130,44 @@ def test_agents_skip_cleanly_without_any_provider(cfg, monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:9/v1")  # nothing listening
     res = engine.run(cfg, "test", stages=("agents",))
     assert res["status"] == "ok" and res["stats"]["agents"].startswith("skipped")
+
+
+def test_retired_model_falls_back_to_working_one(cfg, monkeypatch):
+    """A model that answers 404 (retired, like gemini-2.5-flash in Nov 2026) is skipped for the run."""
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _json(self, code, obj):
+            b = json.dumps(obj).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            self._json(200, {"data": [{"id": "mistral:7b"}, {"id": "llama3.1:8b"}]})
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(body["model"])
+            if body["model"] == "mistral:7b":
+                return self._json(404, {"error": "model not found"})
+            self._json(200, {"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    for k in ("GROQ_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("OLLAMA_BASE_URL", f"http://127.0.0.1:{srv.server_port}/v1")
+    try:
+        r = Router(cfg)
+        res = r.complete("large", "x", "y")
+        assert res.model == "llama3.1:8b" and res.data == {"ok": True}
+        r.complete("large", "x", "y")
+        assert seen == ["mistral:7b", "llama3.1:8b", "llama3.1:8b"]  # the 404 model is not retried
+    finally:
+        srv.shutdown()
