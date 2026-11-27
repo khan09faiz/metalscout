@@ -52,7 +52,7 @@ agents:
 - Cloud free tiers (Groq, Cerebras) answer in seconds, so use them for scheduled runs.
 
 ## Editing agents
-Prompts are Markdown in `prompts/agents/` (`sorter.md`, `analyst.md`, `writer.md`, `scout.md`). Change wording, add fields or tighten rules there. To add an agent, write a prompt and add one branch in `agents/crew.py: Crew.run_company`.
+Prompts are Markdown in [`metalscout/prompts/agents/`](../metalscout/prompts/agents/) (`sorter.md`, `analyst.md`, `writer.md`, `scout.md`). Change wording, add fields or tighten rules there. To add an agent, write a prompt and add one branch in `agents/crew.py: Crew.run_company`.
 
 ## What you see
 - **Agents tab:** roster cards (calls, ok, rejected, models used), provider switches, and a per-model table with latency.

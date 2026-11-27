@@ -11,5 +11,5 @@
 - Scoring lives only in `fit.py` and is computed on read; don't persist scores.
 - The web dashboard must import without Playwright, selectolax or ddgs (Vercel installs `requirements.txt` only). Import `browser` lazily.
 - UI is plain HTML/JS in `metalscout/web/`. Escape every page-derived string (`esc`, `safeUrl`).
-- Agent prompts are Markdown in `prompts/agents/`.
+- Agent prompts are Markdown in `metalscout/prompts/agents/` (shipped as package data).
 - Docs to update when behaviour changes: README, docs/ARCHITECTURE.md, docs/SIGNALS.md, docs/AGENTS.md, docs/DEPLOY.md, CHANGELOG.md.

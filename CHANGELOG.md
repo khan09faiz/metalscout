@@ -8,6 +8,8 @@
 - 500 responses no longer echo exception text (it is logged instead)
 - Dashboard login: 10 failed attempts per IP per 10 minutes, then 429
 - GitHub Actions pinned to commit SHAs
+### Packaging
+- `metalscout.agents` is now in non-editable installs (`packages.find`), and the agent prompts moved to `metalscout/prompts/agents/` as package data. `prompts/master_prompt.md` stays where it was
 
 ## 1.1.0 (2026-11-26)
 - **Agent crew** (optional, free models): a rules-based orchestrator routes each lead to the Sorter (small model), Analyst (large), Writer (large, Tier A/B only) and Scout (buyer-signal pages)

@@ -22,6 +22,7 @@ metalscout/
 ├── leads.py        read model for UI and exports
 ├── engine.py       daily run: lock → stages → export → run record; logging
 ├── agents/         optional crew: llm.py (free-model router), crew.py (orchestrator + agents), ground.py (quote check)
+├── prompts/agents/ the agents' Markdown prompts (package data, so they ship in the wheel)
 ├── scheduler.py    in-app heartbeat + Windows Task Scheduler / cron
 ├── export.py       xlsx (5 tabs), csv, Google Sheets
 ├── server.py       stdlib HTTP JSON API + static files

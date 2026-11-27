@@ -24,7 +24,7 @@ from .ground import locate
 from .llm import BudgetExceeded, Router
 
 log = logging.getLogger("metalscout.agents")
-PROMPTS = Path(__file__).resolve().parents[2] / "prompts" / "agents"
+PROMPTS = Path(__file__).resolve().parents[1] / "prompts" / "agents"  # metalscout/prompts/agents, shipped in the wheel
 METAL_KEYS = set(X.METALS)
 PERIOD_TO_MONTH = {"month": 1, "year": 1 / 12, "annum": 1 / 12, "day": 30, "week": 4.3}
 
