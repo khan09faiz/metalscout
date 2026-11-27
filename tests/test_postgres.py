@@ -78,3 +78,9 @@ def test_dashboard_password(cfg, pg, monkeypatch):
         assert json.load(urllib.request.urlopen(req))["mode"] == "local"
     finally:
         srv.shutdown()
+
+
+def test_pasted_url_with_quotes_and_newline(pg_url):
+    db = DB("", url=f'"{pg_url}\n"\n')
+    assert db.is_pg and db.get("schema_version")
+    db.close()

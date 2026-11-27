@@ -114,6 +114,7 @@ class DB:
 
     def __init__(self, path: str, url: str | None = None):
         url = url if url is not None else os.getenv("DATABASE_URL", "")
+        url = url.strip().strip("\"'").strip()  # tolerate a pasted value with quotes or a trailing newline
         self.is_pg = url.startswith(("postgres://", "postgresql://"))
         if self.is_pg:
             self.c = PgConn(url)
