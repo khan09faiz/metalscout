@@ -14,7 +14,8 @@ Why split it: Vercel's free functions stop after seconds, too short for a 20-min
 
 ## 1. Database: Neon (free)
 1. Create a free project at neon.tech, or in Vercel: Storage → Create → Neon (it adds `DATABASE_URL` to the Vercel project automatically).
-2. Copy the **pooled** connection string (`postgresql://...-pooler...neon.tech/...?sslmode=require`).
+2. Copy the **pooled** connection string: its host contains `-pooler` (`postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/db?sslmode=require`). In Neon's Connect dialog, turn on **Connection pooling**.
+   **Use the pooled string for Vercel.** Every dashboard request is a fresh serverless invocation that opens its own connection, and the direct endpoint runs out of connections quickly; the pooler (PgBouncer) absorbs that. MetalScout already disables prepared statements (`prepare_threshold=None`), which transaction pooling needs. Connections time out after 10 s (`connect_timeout`), so a sleeping or unreachable database gives a quick error instead of a hung request.
 
 ## 2. Engine: GitHub Actions
 Repo → Settings → Secrets and variables → Actions → New repository secret:
@@ -33,7 +34,7 @@ Then go to Actions → **engine** → Run workflow. It also runs daily at 01:00 
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | same Neon string (auto-added if you used the Vercel → Neon integration) |
+| `DATABASE_URL` | the Neon **pooled** (`-pooler`) string (the Vercel → Neon integration adds one; check that its host has `-pooler`) |
 | `DASHBOARD_PASSWORD` | any password; the browser asks for it (any username) |
 | `GITHUB_REPO` | `khan09faiz/metalscout` |
 | `GITHUB_DISPATCH_TOKEN` | a **fine-grained** personal access token scoped to this one repository, with only **Actions: Read and write** (no other permissions; classic tokens are too broad) |
@@ -46,7 +47,7 @@ The dashboard only sends one of the known stage names (`discover`, `profile`, `s
 | Piece | Free allowance | MetalScout use |
 |---|---|---|
 | GitHub Actions (private repo) | 2,000 min/month | ~30 min/day ≈ 900 min/month |
-| Neon | 0.5 GB storage, auto-suspend | ~1–3 MB/day of observations + page digests |
+| Neon | 0.5 GB storage, auto-suspend | ~1–3 MB/day of observations + page digests; only the last `pipeline.keep_profile_runs` (3) profiles per company are kept, so it levels off |
 | Vercel Hobby | personal, non-commercial use; generous function limits | a few requests per visit |
 | Models | free tiers (see docs/AGENTS.md) | ≤150 calls/run (`agents.max_calls_per_run`) |
 

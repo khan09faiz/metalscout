@@ -72,7 +72,8 @@ class PgConn:
         import psycopg
         # autocommit: every statement is its own transaction, so reads never sit "idle in transaction"
         # holding locks (which would block other connections, e.g. the dashboard during a run)
-        self.pg = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+        # connect_timeout: fail fast instead of hanging a serverless request when Neon is waking up or unreachable
+        self.pg = psycopg.connect(url, autocommit=True, prepare_threshold=None, connect_timeout=10)
 
     @staticmethod
     def _factory(cur):
@@ -171,7 +172,8 @@ class DB:
             "SELECT * FROM companies WHERE status='new' OR (status IN ('profiled','failed') AND COALESCE(last_profiled,0) < ?) "
             "ORDER BY CASE status WHEN 'new' THEN 0 ELSE 1 END, first_seen LIMIT ?", (cutoff, limit)).fetchall()
 
-    def save_profile(self, company_id: int, run_id: str, name: str, status: str, obs: list[dict], error: str = "") -> None:
+    def save_profile(self, company_id: int, run_id: str, name: str, status: str, obs: list[dict], error: str = "",
+                     keep_runs: int = 3) -> None:
         t = now()
         self.c.executemany(
             "INSERT INTO observations(company_id,run_id,signal,value,num,source_url,evidence,observed_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -181,6 +183,21 @@ class DB:
                        "agent_attempts=0 WHERE id=?",
                        (name, status, t, run_id, error, company_id))
         self.c.commit()
+        if keep_runs > 0:
+            self.prune_observations(company_id, keep_runs)
+
+    def prune_observations(self, company_id: int, keep_runs: int) -> int:
+        """Delete this company's observations (agent facts included) outside its last `keep_runs` profile runs."""
+        runs = [r[0] for r in self.c.execute(
+            "SELECT run_id FROM observations WHERE company_id=? AND run_id IS NOT NULL GROUP BY run_id "
+            "ORDER BY MIN(observed_at) DESC, run_id DESC", (company_id,))]
+        if len(runs) <= keep_runs:
+            return 0
+        keep = runs[:keep_runs]
+        cur = self.c.execute(f"DELETE FROM observations WHERE company_id=? AND (run_id IS NULL OR run_id NOT IN ({','.join('?' * len(keep))}))",
+                             (company_id, *keep))
+        self.c.commit()
+        return cur.rowcount
 
     def latest_observations(self, company_id: int, run_id: str | None) -> list[dict]:
         if not run_id:

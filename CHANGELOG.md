@@ -14,6 +14,11 @@
 - Grounding gate checks that a quote *supports* the fact (`ground.supports`: metal regex, volume number, person name, product word), not just that it exists; failures count as rejected
 - Writer drafts with numbers that aren't in the given facts are stored with `unverified numbers: …` and shown with a warning in the lead drawer
 - Prompts state that page text is untrusted data and that instructions in it must be ignored; a test proves model output never becomes a crawl URL or a contact
+### Performance and storage
+- `leads.build()`: two queries (companies + one join on `run_id = last_profile_run`) instead of one query per company; 2,000 companies × 20 observations went from 2,001 queries to 2. `/api/status` counts come from `leads.summary()` over the same two queries, and company rows no longer load page digests
+- `pipeline.keep_profile_runs` (default 3): older profile runs' observations, agent facts included, are deleted after each profile
+- Postgres `connect_timeout=10`; DEPLOY.md says to use Neon's pooled (`-pooler`) string on Vercel
+- New companies are crawled from their homepage; the search-hit or pasted URL is kept in `source`
 ### Packaging
 - `metalscout.agents` is now in non-editable installs (`packages.find`), and the agent prompts moved to `metalscout/prompts/agents/` as package data. `prompts/master_prompt.md` stays where it was
 

@@ -44,8 +44,8 @@ Each stage is wrapped in its own try/except, so a failed stage doesn't stop the 
 ## Data model
 | Table | Key columns | Notes |
 |---|---|---|
-| `companies` | domain (unique), website, name, status, stage, last_profile_run, agents_run, agent_attempts | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
-| `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only; latest run per company is the current view |
+| `companies` | domain (unique), website (the homepage, `scheme://host/`), name, status, stage, found_via (the query), source (`search:<hit URL>` / `manual:<URL>` / `csv`), last_profile_run, agents_run, agent_attempts | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
+| `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only per run; latest run per company is the current view. After each profile, runs older than the company's last `pipeline.keep_profile_runs` (default 3) are deleted, their `AGENT_*` facts included |
 | `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened, agent_checked, agent_attempts | marketplace/tender/social/csv |
 | `runs` | id, trigger, started, finished, status, stats(json), errors(json) | powers the Runs tab and "ran today?" |
 | `kv` | query_cursor, query_total, schema_version | |
@@ -60,11 +60,15 @@ Hits are routed as follows:
 
 ## Crawler
 - One Chromium per stage, `concurrency` pages in parallel across sites.
+- Starts at the homepage (`scheme://host/`): discovery and "Add sites" store that rather than the deep page a search hit or a paste pointed at.
 - Same registered domain only. Images, fonts and media are blocked for speed.
 - Priority: contact 100 › about 80 › products 60 › infrastructure 55 › vendor/tender 50 › other links from the homepage 10. Each page is scrolled four times for lazy content.
 - "Next" pagination is followed up to three times.
 - Each URL is checked against robots.txt. There is a 1–2.5 s delay between pages, and each site has a 150 s overall budget (it returns what it has read so far).
 - Private, loopback and metadata IPs are rejected (`net.is_public`).
+
+## Read model
+`leads.build()` reads the shown companies and their latest-profile observations in **two queries**: one for the companies, one join `observations ⋈ companies ON company_id AND run_id = last_profile_run` (served by `ix_obs`), grouped in Python. `leads.summary()` uses the same two queries for the dashboard's counts, so `/api/status` (polled every 5 s) never builds every lead.
 
 ## Scoring
 `fit.score()` runs on every read, so editing weights in YAML re-ranks instantly. Traders are capped at 15. A do-not-contact match scores 0 and gets tier X.

@@ -75,9 +75,10 @@ def main(argv=None):
         serve(cfg, heartbeat=not args.no_scheduler)
     if args.cmd == "add":
         from .engine import open_db
-        from .net import reg_domain
+        from .net import homepage, reg_domain
         db = open_db(cfg)
-        n = sum(db.add_company(reg_domain(u), u if u.startswith("http") else "https://" + u, "manual", "manual") for u in args.urls)
+        urls = [u if u.startswith("http") else "https://" + u for u in args.urls]
+        n = sum(db.add_company(reg_domain(u), homepage(u), "manual", f"manual:{u}") for u in urls)
         print(f"queued {n} new site(s)")
     if args.cmd == "import":
         from .engine import open_db

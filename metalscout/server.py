@@ -27,7 +27,7 @@ from . import export, leads as L, scheduler
 from .config import path
 from .db import DB, iso
 from .engine import STAGES, is_running, open_db, parse_stages
-from .net import reg_domain
+from .net import homepage, reg_domain
 
 log = logging.getLogger("metalscout.server")
 WEB = Path(__file__).parent / "web"
@@ -49,8 +49,7 @@ def cloud_dispatch() -> tuple[str, str] | None:
 
 
 def status(cfg: dict, db: DB) -> dict:
-    rows = L.build(db, cfg)
-    non_traders = [r for r in rows if r["org_type"] != "trader"]
+    n = L.summary(db, cfg)
     last = db.runs(1)
     q = lambda sql: db.c.execute(sql).fetchone()[0]
     if cloud_dispatch():
@@ -63,9 +62,7 @@ def status(cfg: dict, db: DB) -> dict:
         "last_run": (last[0] | {"started_h": iso(last[0]["started"]), "finished_h": iso(last[0]["finished"])}) if last else None,
         "next_run": next_run,
         "counts": {"companies": q("SELECT COUNT(*) FROM companies"), "queued": q("SELECT COUNT(*) FROM companies WHERE status='new'"),
-                   "leads": len(non_traders), "A": sum(r["tier"] == "A" for r in non_traders), "B": sum(r["tier"] == "B" for r in non_traders),
-                   "new_today": sum(r["is_new"] for r in non_traders), "traders": len(rows) - len(non_traders),
-                   "signals": q("SELECT COUNT(*) FROM buyer_signals"), "ai_leads": sum(r["ai"]["has_any"] for r in non_traders)},
+                   **n, "signals": q("SELECT COUNT(*) FROM buyer_signals")},
         "query_progress": f"{db.get('query_cursor', '0')}/{db.get('query_total', '?')}",
         "business": cfg["business"]["name"],
         "mode": "cloud" if cloud_dispatch() else "local",
@@ -298,7 +295,7 @@ def make_handler(cfg: dict):
                         if not url:
                             continue
                         url = url if url.startswith("http") else "https://" + url
-                        added += db.add_company(reg_domain(url), url, "manual", "manual")
+                        added += db.add_company(reg_domain(url), homepage(url), "manual", f"manual:{url}")
                     return self._send(200, {"added": added})
                 return self._send(404, {"error": "not found"})
             except Exception:

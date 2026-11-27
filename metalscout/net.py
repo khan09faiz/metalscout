@@ -19,6 +19,12 @@ def reg_domain(url: str) -> str:
     return f"{e.domain}.{e.suffix}".lower() if e.suffix else (e.domain or urlparse(url).hostname or "").lower()
 
 
+def homepage(url: str) -> str:
+    """scheme://host[:port]/ of a URL: where a company crawl should start (not a deep search-hit page)."""
+    p = urlparse(url if "://" in url else "https://" + url)
+    return f"{p.scheme or 'https'}://{p.netloc.rsplit('@', 1)[-1].lower()}/"
+
+
 def host_matches(url_or_domain: str, domains) -> bool:
     d = reg_domain(url_or_domain) if "/" in url_or_domain else url_or_domain.lower()
     return any(d == x or d.endswith("." + x) for x in domains)

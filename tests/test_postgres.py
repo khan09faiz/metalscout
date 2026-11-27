@@ -84,3 +84,30 @@ def test_pasted_url_with_quotes_and_newline(pg_url):
     db = DB("", url=f'"{pg_url}\n"\n')
     assert db.is_pg and db.get("schema_version")
     db.close()
+
+
+def test_new_queries_on_postgres(cfg, pg):
+    """The single-join leads query, observation pruning and the agent retry queue, on Postgres."""
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_performance import CountingConn, seed
+    db = engine.open_db(cfg)
+    assert db.is_pg
+    seed(db, 50, 12, runs=("r1", "r2"))
+    db.c.execute("SELECT setval(pg_get_serial_sequence('companies','id'), 1000)")
+    inner = db.c
+    db.c = CountingConn(inner)
+    rows = leads.build(db, cfg)
+    assert len(rows) == 50 and len(db.c.calls) <= 3
+    assert leads.summary(db, cfg)["leads"] == 50
+    db.c = inner
+
+    db.save_profile(1, "r3", "C1", "profiled", [{"signal": "METAL", "value": "steel"}], keep_runs=2)
+    assert sorted({r[0] for r in db.c.execute("SELECT run_id FROM observations WHERE company_id=1")}) == ["r2", "r3"]
+
+    db.c.execute("UPDATE companies SET digest='### PAGE x' WHERE id IN (1, 2)")
+    db.agent_failed("companies", 1)
+    assert [r["id"] for r in db.companies_for_agents(2, 3)][0] == 2
+    for _ in range(2):
+        db.agent_failed("companies", 1)
+    assert 1 not in [r["id"] for r in db.companies_for_agents(100, 3)]

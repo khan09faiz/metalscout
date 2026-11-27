@@ -24,7 +24,7 @@ DEFAULTS: dict = {
     "domains": {"signal": [], "restricted": [], "skip": []},
     "crawl": {"max_pages": 12, "max_depth": 2, "concurrency": 3, "delay_min": 1.0, "delay_max": 2.5,
               "site_timeout_s": 150, "allow_private_hosts": False},
-    "pipeline": {"profile_per_run": 60, "signals_per_run": 40, "reprofile_after_days": 30},
+    "pipeline": {"profile_per_run": 60, "signals_per_run": 40, "reprofile_after_days": 30, "keep_profile_runs": 3},
     "fit": {"manufacturer": 30, "metal_match": 20, "quantity": 15, "email": 15, "phone": 10, "registration": 5, "intent": 5,
             "tier_a": 65, "tier_b": 40},
     "schedule": {"daily_at": "06:30", "enabled": True},

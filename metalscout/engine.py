@@ -99,14 +99,15 @@ async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: lis
                 try:
                     pages = await s.crawl(c["website"])
                     name, status, obs = profile.observe(c["website"], pages)
-                    db.save_profile(c["id"], run_id, name, status, obs, "" if status == "profiled" else status)
+                    db.save_profile(c["id"], run_id, name, status, obs, "" if status == "profiled" else status,
+                                    keep_runs=pc.get("keep_profile_runs", 3))
                     if status == "profiled":
                         db.save_digest(c["id"], build_digest(pages))
                     stats["profiled" if status == "profiled" else "profile_failed"] += 1
                     log.info("profiled %-35s %-10s %d obs", c["domain"], status, len(obs))
                 except Exception as e:
                     stats["profile_failed"] += 1
-                    db.save_profile(c["id"], run_id, "", "failed", [], str(e)[:300])
+                    db.save_profile(c["id"], run_id, "", "failed", [], str(e)[:300], keep_runs=pc.get("keep_profile_runs", 3))
                     errors.append(f"profile {c['domain']}: {e}")
                 db.update_run_stats(run_id, stats)
         await asyncio.gather(*(one(c) for c in todo))

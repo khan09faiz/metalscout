@@ -21,7 +21,7 @@ import httpx
 
 from . import extract as X
 from .db import DB
-from .net import host_matches, reg_domain
+from .net import homepage, host_matches, reg_domain
 
 log = logging.getLogger("metalscout.sources")
 JUNK_URL = re.compile(r"aclick|/ads?/|doubleclick|googleadservices|/search\?|bing\.com/ck", re.I)
@@ -116,7 +116,8 @@ def discover(db: DB, cfg: dict, run_id: str, stats: dict, errors: list[str]) -> 
         for h in hits:
             kind = route(h, cfg)
             if kind == "company":
-                if db.add_company(reg_domain(h["url"]), h["url"], q, "search"):
+                # crawl from the homepage; keep the search-hit page in `source`
+                if db.add_company(reg_domain(h["url"]), homepage(h["url"]), q, f"search:{h['url']}"):
                     stats["new_companies"] += 1
             elif kind == "signal":
                 txt = f"{h['title']} {h['snippet']}"
