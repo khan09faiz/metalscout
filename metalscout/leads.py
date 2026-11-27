@@ -24,10 +24,10 @@ def _load(db: DB) -> tuple[list[dict], dict[int, list[dict]]]:
     """Companies to show + their latest-profile observations, in two queries (no per-company query).
     The join uses ix_obs(company_id, run_id, ...), so no extra index is needed."""
     marks = ",".join("?" * len(SHOWN))
-    companies = [dict(r) for r in db.c.execute(f"SELECT {COMPANY_COLS} FROM companies WHERE status IN ({marks})", SHOWN)]
+    companies = [dict(r) for r in db.c.execute(f"SELECT {COMPANY_COLS} FROM companies WHERE status IN ({marks})", SHOWN)]  # noqa: S608  # constant column list and '?' placeholders
     obs: dict[int, list[dict]] = {}
     for r in db.c.execute(
-            "SELECT o.company_id, o.signal, o.value, o.num, o.source_url, o.evidence, o.observed_at FROM observations o "
+            "SELECT o.company_id, o.signal, o.value, o.num, o.source_url, o.evidence, o.observed_at FROM observations o "  # noqa: S608  # '?' placeholders only
             f"JOIN companies c ON c.id = o.company_id AND o.run_id = c.last_profile_run WHERE c.status IN ({marks}) "
             "ORDER BY o.id", SHOWN):
         d = dict(r)

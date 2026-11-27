@@ -26,7 +26,7 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 | `GROQ_API_KEY` / `CEREBRAS_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | at least one for agents | free keys from console.groq.com, cloud.cerebras.ai, aistudio.google.com, openrouter.ai |
 | `SERPER_API_KEY` | optional | 2,500 free Google searches (otherwise DuckDuckGo) |
 
-Then go to Actions → **engine** → Run workflow. If a run crashes, times out or is cancelled, the workflow's last step marks it `failed` in the database (`python -m metalscout mark-failed`), so the dashboard doesn't keep showing "running". It also runs daily at 01:00 UTC (06:30 IST). Each run's Excel file is kept as an artifact for 14 days.
+Then go to Actions → **engine** → Run workflow. If a run crashes, times out or is cancelled, the workflow's last step marks it `failed` in the database (`python -m metalscout mark-failed`), so the dashboard doesn't keep showing "running". It also runs daily at 01:00 UTC (06:30 IST). Each run's Excel file is kept as an artifact for 14 days. The workflow installs exact, hash-checked versions from `requirements-engine.lock`, its actions are pinned to commit SHAs, and Dependabot proposes weekly updates for both.
 
 ## 3. Dashboard: Vercel
 1. vercel.com → Add New → Project → import `khan09faiz/metalscout`. Framework: **Other**. Leave the build settings empty.

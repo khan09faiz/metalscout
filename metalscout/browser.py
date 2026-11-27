@@ -16,7 +16,7 @@ from playwright.async_api import async_playwright
 from selectolax.lexbor import LexborHTMLParser
 
 from . import net
-from .net import UA, Robots, reg_domain
+from .net import Robots, reg_domain, user_agents
 
 PRIORITY = [(r"contact|reach-?us|get-?in-?touch", 100), (r"about|company|profile|who-?we-?are|overview", 80),
             (r"product|industr|application|sector|customer|client|range", 60),
@@ -61,13 +61,14 @@ class Surfer:
 
     def __init__(self, cfg: dict):
         self.cfg = cfg["crawl"]
-        self.robots = Robots(allow_private=bool(self.cfg.get("allow_private_hosts")))
+        self.bot_ua, self.browser_ua = user_agents(cfg)
+        self.robots = Robots(allow_private=bool(self.cfg.get("allow_private_hosts")), ua=self.bot_ua)
         self._pw = self._browser = self._ctx = None
 
     async def __aenter__(self):
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(headless=True)
-        self._ctx = await self._browser.new_context(user_agent=UA, locale="en-IN", viewport={"width": 1366, "height": 900})
+        self._ctx = await self._browser.new_context(user_agent=self.browser_ua, locale="en-IN", viewport={"width": 1366, "height": 900})
         return self
 
     async def __aexit__(self, *exc):
@@ -140,14 +141,14 @@ class Surfer:
                     continue
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                except Exception:
+                except Exception:  # noqa: S112  # an unreachable page is skipped; the crawl reports pages read
                     continue
                 if not self._ok_host(page.url):  # redirected to a private host: discard and stop this site
                     break
                 try:
                     await page.wait_for_timeout(600)
                     final, text, html = await _snapshot(page)
-                except Exception:
+                except Exception:  # noqa: S112  # page closed or navigated mid-snapshot: skip it
                     continue
                 pages.append({"url": final, "text": text, "html": html, "depth": depth})
                 await asyncio.sleep(random.uniform(c["delay_min"], c["delay_max"]))

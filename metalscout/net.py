@@ -10,7 +10,20 @@ from urllib.parse import urljoin, urlparse
 import httpx
 import tldextract
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+from . import __version__
+
+# Our crawler identity: sent with robots.txt fetches and matched against robots.txt rules (`crawl.user_agent`).
+BOT_UA = f"MetalScoutBot/{__version__} (+https://github.com/khan09faiz/metalscout)"
+# What a desktop Chrome sends; the browser context uses it with BOT_UA appended (`crawl.browser_user_agent`).
+CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+UA = BOT_UA  # backwards-compatible name
+
+
+def user_agents(cfg: dict) -> tuple[str, str]:
+    """(bot UA for robots.txt + httpx, UA for the Playwright context) from cfg["crawl"]."""
+    c = cfg.get("crawl", {})
+    bot = str(c.get("user_agent") or BOT_UA)
+    return bot, str(c.get("browser_user_agent") or f"{CHROME_UA} {bot}")
 _tld = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)  # offline bundled list; no cache writes (read-only hosts)
 
 
@@ -55,8 +68,8 @@ def is_public(url: str) -> bool:
 
 
 class Robots:
-    def __init__(self, allow_private: bool = False):
-        self.allow_private = allow_private
+    def __init__(self, allow_private: bool = False, ua: str = BOT_UA):
+        self.allow_private, self.ua = allow_private, ua
         self.cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
 
     def _ok(self, url: str) -> bool:
@@ -67,7 +80,7 @@ class Robots:
         Redirects are followed by hand so every hop is checked *before* it is requested."""
         rp = urllib.robotparser.RobotFileParser()
         try:
-            async with httpx.AsyncClient(timeout=8, headers={"User-Agent": UA}, follow_redirects=False) as c:
+            async with httpx.AsyncClient(timeout=8, headers={"User-Agent": self.ua}, follow_redirects=False) as c:
                 for _ in range(5):
                     if not self._ok(url):
                         return None
@@ -77,7 +90,7 @@ class Robots:
                         continue
                     rp.parse(r.text.splitlines() if r.status_code == 200 else [])
                     return rp
-        except Exception:
+        except Exception:  # noqa: S110  # unreachable robots.txt: falls through to 'no rules'
             pass
         rp.parse([])
         return rp
@@ -90,4 +103,4 @@ class Robots:
         if base not in self.cache:
             self.cache[base] = await self._fetch(base + "/robots.txt")
         rp = self.cache[base]
-        return rp is not None and rp.can_fetch(UA, url)
+        return rp is not None and rp.can_fetch(self.ua, url)  # rules match on the first token: "MetalScoutBot"

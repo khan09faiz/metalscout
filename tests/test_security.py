@@ -131,7 +131,8 @@ def test_login_limiter_window_expires(monkeypatch):
     t = {"now": 1000.0}
     monkeypatch.setattr(server.time, "time", lambda: t["now"])
     lim = server.LoginLimiter(max_fails=2, window_s=60)
-    lim.fail("1.2.3.4"); lim.fail("1.2.3.4")
+    lim.fail("1.2.3.4")
+    lim.fail("1.2.3.4")
     assert lim.retry_after("1.2.3.4") > 0 and lim.retry_after("5.6.7.8") == 0
     t["now"] += 61
     assert lim.retry_after("1.2.3.4") == 0
@@ -195,7 +196,8 @@ def test_robots_redirect_to_private_host_is_not_followed(only_127_is_public):
         assert asyncio.run(r.allowed(f"http://127.0.0.1:{pub.server_port}/page")) is False
         assert pub.hits == ["/robots.txt"] and priv.hits == []
     finally:
-        priv.shutdown(); pub.shutdown()
+        priv.shutdown()
+        pub.shutdown()
 
 
 def test_host_is_public_rejects_internal_addresses():
@@ -229,4 +231,5 @@ def test_browser_drops_redirect_to_private_host_and_blocks_subrequests(cfg, only
         print("private host saw:", priv.hits)
         assert "/pixel.js" not in priv.hits  # in-page request to a private host was blocked by the route handler
     finally:
-        priv.shutdown(); pub.shutdown()
+        priv.shutdown()
+        pub.shutdown()

@@ -13,6 +13,7 @@ import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 SCHEMA_VERSION = 4
 SCHEMA = """
@@ -50,7 +51,7 @@ RUN_STALE_S = 20 * 60  # a 'running' run with no heartbeat for this long is trea
 class Row(dict):
     """Dict row that also supports positional access (r[0]), like sqlite3.Row."""
     def __init__(self, names, values):
-        super().__init__(zip(names, values))
+        super().__init__(zip(names, values, strict=False))
         self._values = values
 
     def __getitem__(self, k):
@@ -120,6 +121,7 @@ class DB:
         url = url if url is not None else os.getenv("DATABASE_URL", "")
         url = url.strip().strip("\"'").strip()  # tolerate a pasted value with quotes or a trailing newline
         self.is_pg = url.startswith(("postgres://", "postgresql://"))
+        self.c: Any  # sqlite3.Connection or PgConn (same execute/commit surface)
         if self.is_pg:
             self.c = PgConn(url)
             # DDL only when the schema is missing or older; skips table locks on every dashboard request
@@ -196,7 +198,7 @@ class DB:
         if len(runs) <= keep_runs:
             return 0
         keep = runs[:keep_runs]
-        cur = self.c.execute(f"DELETE FROM observations WHERE company_id=? AND (run_id IS NULL OR run_id NOT IN ({','.join('?' * len(keep))}))",
+        cur = self.c.execute(f"DELETE FROM observations WHERE company_id=? AND (run_id IS NULL OR run_id NOT IN ({','.join('?' * len(keep))}))",  # noqa: S608  # only '?' placeholders are interpolated
                              (company_id, *keep))
         self.c.commit()
         return cur.rowcount
@@ -212,7 +214,7 @@ class DB:
         allowed = {k: v for k, v in fields.items() if k in ("stage", "notes")}
         if allowed:
             sets = ",".join(f"{k}=?" for k in allowed)
-            self.c.execute(f"UPDATE companies SET {sets} WHERE id=?", (*allowed.values(), cid))
+            self.c.execute(f"UPDATE companies SET {sets} WHERE id=?", (*allowed.values(), cid))  # noqa: S608  # column names filtered to stage/notes above
             self.c.commit()
 
     # ---- buyer signals
@@ -226,7 +228,7 @@ class DB:
 
     def update_signal(self, sid: int, **row) -> None:
         row = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v) for k, v in row.items()}
-        self.c.execute(f"UPDATE buyer_signals SET {','.join(f'{k}=?' for k in row)} WHERE id=?", (*row.values(), sid))
+        self.c.execute(f"UPDATE buyer_signals SET {','.join(f'{k}=?' for k in row)} WHERE id=?", (*row.values(), sid))  # noqa: S608  # column names come from internal callers, values are bound
         self.c.commit()
 
     def signals_to_open(self, limit: int) -> list[sqlite3.Row]:
@@ -274,7 +276,7 @@ class DB:
         return out
 
     def last_run(self, statuses=("ok", "partial")) -> dict | None:
-        q = f"SELECT * FROM runs WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY started DESC LIMIT 1"
+        q = f"SELECT * FROM runs WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY started DESC LIMIT 1"  # noqa: S608  # only '?' placeholders are interpolated
         r = self.c.execute(q, statuses).fetchone()
         return dict(r) if r else None
 
@@ -308,7 +310,7 @@ class DB:
         """Count one failed agent attempt on a company or buyer signal."""
         if table not in ("companies", "buyer_signals"):
             raise ValueError(table)
-        self.c.execute(f"UPDATE {table} SET agent_attempts=COALESCE(agent_attempts,0)+1 WHERE id=?", (row_id,))
+        self.c.execute(f"UPDATE {table} SET agent_attempts=COALESCE(agent_attempts,0)+1 WHERE id=?", (row_id,))  # noqa: S608  # table validated against a fixed set above
         self.c.commit()
 
     def add_observations(self, company_id: int, run_id: str, obs: list[dict]) -> None:

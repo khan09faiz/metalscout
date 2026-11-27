@@ -62,7 +62,7 @@ def start_heartbeat(cfg: dict) -> threading.Thread:
             try:
                 if due(cfg):
                     spawn_run(cfg, "schedule")
-            except Exception:
+            except Exception:  # noqa: S110  # the heartbeat thread must never die
                 pass
             time.sleep(60)
     t = threading.Thread(target=loop, daemon=True, name="metalscout-heartbeat")
@@ -82,12 +82,12 @@ Register-ScheduledTask -TaskName '{TASK_NAME}' -Action $action -Trigger $trigger
 
 def install_windows_task(cfg: dict) -> str:
     script = windows_task_script(cfg)
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], capture_output=True, text=True)
+    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], capture_output=True, text=True)  # noqa: S607  # Windows-only, fixed command
     return (r.stdout + r.stderr).strip() or "installed"
 
 
 def remove_windows_task() -> str:
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false"],
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false"],  # noqa: S607  # Windows-only, fixed command
                        capture_output=True, text=True)
     return (r.stdout + r.stderr).strip() or "removed"
 

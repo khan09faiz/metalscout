@@ -40,11 +40,14 @@ crawl:
   delay_min: 1.0           # seconds between pages on one site
   delay_max: 2.5
   site_timeout_s: 150
+  user_agent: ""           # "" = MetalScoutBot/<version> (+https://github.com/khan09faiz/metalscout); used for robots.txt
+  browser_user_agent: ""   # "" = Chrome's UA with the bot UA appended; see docs/COMPLIANCE.md before changing
 
 pipeline:
   profile_per_run: 60      # company sites read per run
   signals_per_run: 40
   reprofile_after_days: 30 # re-read sites monthly so changes show up
+  keep_profile_runs: 3     # observations kept per company: its last N profile runs
 
 fit:                       # score weights (total 100) and tier cut-offs
   manufacturer: 30
@@ -70,6 +73,7 @@ export:
 web:
   host: 127.0.0.1
   port: 8000
+  allowed_hosts: []        # extra Host names the local dashboard answers to (e.g. a LAN name)
 
 compliance:
   do_not_contact: []       # domains or emails that must never appear as leads

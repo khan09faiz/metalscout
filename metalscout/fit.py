@@ -28,7 +28,7 @@ def _dnc(domain: str, emails: list[str], dnc: list[str]) -> bool:
 
 def score(company: dict, obs: list[dict], cfg: dict) -> dict:
     w = cfg["fit"]
-    sig = {}
+    sig: dict[str, list[dict]] = {}
     for o in obs:
         sig.setdefault(o["signal"], []).append(o)
     vals = lambda s: [o["value"] for o in sig.get(s, [])]
@@ -45,34 +45,43 @@ def score(company: dict, obs: list[dict], cfg: dict) -> dict:
         org = {"both": "manufacturer", "service": "trader"}.get(v, v)
         why.append(f"AI: {v}")
     if org == "manufacturer":
-        s += w["manufacturer"]; why.append("manufacturer / end user")
+        s += w["manufacturer"]
+        why.append("manufacturer / end user")
     elif org == "unknown":
         why.append("type unclear")
     sells = set(cfg["business"]["sells"])
     ai_metals = [str(v).split(":")[0].strip() for v in vals("AGENT_MATERIAL")]
     matched = [m for m in dict.fromkeys(vals("METAL") + ai_metals) if m in sells]
     if matched:
-        s += w["metal_match"]; why.append("uses " + ", ".join(matched))
+        s += w["metal_match"]
+        why.append("uses " + ", ".join(matched))
     if sig.get("QUANTITY"):
         big = max(sig["QUANTITY"], key=lambda o: o.get("num") or 0)
-        s += w["quantity"]; why.append(f"quantity: {big['value']}")
+        s += w["quantity"]
+        why.append(f"quantity: {big['value']}")
     elif sig.get("AGENT_VOLUME"):
-        s += w["quantity"]; why.append(f"AI: volume {sig['AGENT_VOLUME'][0]['value']}")
+        s += w["quantity"]
+        why.append(f"AI: volume {sig['AGENT_VOLUME'][0]['value']}")
     own = [o for o in sig.get("EMAIL", []) if o.get("evidence") == "own domain"]
     if own:
-        s += w["email"]; why.append("company email")
+        s += w["email"]
+        why.append("company email")
     elif emails:
-        s += int(w["email"] * 2 / 3); why.append("email (other domain)")
+        s += int(w["email"] * 2 / 3)
+        why.append("email (other domain)")
     if sig.get("PHONE"):
         s += w["phone"]
         if w["phone"]:
             why.append("phone")
     if any(sig.get(k) for k in ("GSTIN", "CIN", "UDYAM", "IEC")):
-        s += w["registration"]; why.append("registration no. printed")
+        s += w["registration"]
+        why.append("registration no. printed")
     if sig.get("VENDOR_PAGE") or sig.get("BUYER_INTENT") or sig.get("AGENT_BUYING_SIGNAL"):
-        s += w["intent"]; why.append("vendor/RFQ wording")
+        s += w["intent"]
+        why.append("vendor/RFQ wording")
     if org == "trader":
-        s = min(s, 15); why.insert(0, "looks like a trader/dealer" if not ai_org else "not a metal user (AI)")
+        s = min(s, 15)
+        why.insert(0, "looks like a trader/dealer" if not ai_org else "not a metal user (AI)")
     if not emails and not sig.get("PHONE"):
         why.append("no contact found yet")
     s = max(0, min(100, s))

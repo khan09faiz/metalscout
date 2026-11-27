@@ -44,7 +44,8 @@ def test_engine_and_dashboard_on_postgres(site, cfg, pg, monkeypatch):
     assert db.is_pg
     assert db.add_company(reg_domain(site), site, "test", "manual") is True
     assert db.add_company(reg_domain(site), site, "test", "manual") is False  # ON CONFLICT DO NOTHING
-    db.set("query_cursor", "5"); db.set("query_cursor", "7")              # upsert
+    db.set("query_cursor", "5")
+    db.set("query_cursor", "7")              # upsert
     assert db.get("query_cursor") == "7"
 
     res = engine.run(cfg, "test", stages=("profile", "agents", "export"))

@@ -23,7 +23,9 @@ DEFAULTS: dict = {
     },
     "domains": {"signal": [], "restricted": [], "skip": []},
     "crawl": {"max_pages": 12, "max_depth": 2, "concurrency": 3, "delay_min": 1.0, "delay_max": 2.5,
-              "site_timeout_s": 150, "allow_private_hosts": False},
+              "site_timeout_s": 150, "allow_private_hosts": False,
+              "user_agent": "",           # "" = MetalScoutBot/<version> (+repo URL); robots.txt matching + httpx
+              "browser_user_agent": ""},  # "" = Chrome's UA + the bot UA; see docs/COMPLIANCE.md
     "pipeline": {"profile_per_run": 60, "signals_per_run": 40, "reprofile_after_days": 30, "keep_profile_runs": 3},
     "fit": {"manufacturer": 30, "metal_match": 20, "quantity": 15, "email": 15, "phone": 10, "registration": 5, "intent": 5,
             "tier_a": 65, "tier_b": 40},
@@ -45,7 +47,8 @@ def _merge(a: dict, b: dict) -> dict:
 
 
 def load(path: str | Path | None = None) -> dict:
-    p = Path(path or os.getenv("METALSCOUT_CONFIG", HOME / "metalscout.yaml"))
+    env = os.getenv("METALSCOUT_CONFIG")  # default only when unset, as getenv(key, default) does
+    p = Path(path or (env if env is not None else HOME / "metalscout.yaml"))
     data = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
     cfg = _merge(DEFAULTS, data or {})
     cfg["_path"] = str(p)

@@ -182,7 +182,8 @@ def make_handler(cfg: dict):
             """DNS-rebinding and CSRF checks. Sends 403 and returns False when the request must be refused."""
             reason = ""
             if not os.getenv("VERCEL"):
-                port = self.server.server_address[1]
+                addr = self.server.server_address
+                port = addr[1] if isinstance(addr, tuple) else 0
                 names = {"localhost", "127.0.0.1", str(cfg["web"]["host"]).lower(),
                          *(str(h).lower() for h in cfg["web"].get("allowed_hosts") or [])}
                 allowed = {f"{n}:{port}" for n in names} | (names if port == 80 else set())

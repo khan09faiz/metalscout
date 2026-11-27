@@ -10,7 +10,6 @@ import pytest
 from metalscout import engine, leads
 from metalscout.agents import ground
 from metalscout.agents.crew import Crew
-from metalscout.agents.llm import Router
 from metalscout.db import MIGRATIONS, SCHEMA_VERSION
 
 from test_agents import REPLIES, fake_server

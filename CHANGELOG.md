@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0 (unreleased)
+## 1.2.0 (2026-11-28)
 ### Security
 - Engine workflow: `stages` and the trigger reach bash through `env:` only and are validated against `^[a-z,-]+$`; the dashboard and the `run --stages` CLI reject unknown stage names (400 / exit 2)
 - Local dashboard: `Host` allowlist (DNS rebinding), POSTs must be JSON, cross-origin `Origin` refused (CSRF), all with 403; new `web.allowed_hosts` for LAN names
@@ -23,6 +23,11 @@
 - Runs beat a heartbeat (`runs.heartbeat`, schema v4); a `running` run silent for 20 minutes no longer blocks new runs or shows as running. New `mark-failed` command, run by `engine.yml` when the job fails or is cancelled
 - Run status: `ok` = no stage failed, `partial` = some, `failed` = all. Per-site / per-signal / per-call problems are capped `warnings` in stats (shown on the Runs tab), not `errors`. A discover stage in which every search failed counts as a failed stage
 - `schedule show` quotes paths in the cron line; the fit score gives a "phone" reason; a do-not-contact domain also blocks emails at that domain or its subdomains
+### Tooling and identity
+- `ruff` (E, F, B, UP, S) and `mypy` in the `dev` extras and in CI; findings fixed without behaviour changes
+- Hashed lock files (`requirements.lock`, `requirements-engine.lock`, generated with `uv pip compile --universal`); the engine workflow installs with `--require-hashes`. Dependabot weekly for pip and GitHub Actions
+- Crawler identity: `crawl.user_agent` (default `MetalScoutBot/<version> (+https://github.com/khan09faiz/metalscout)`) for robots.txt and httpx; the browser sends Chrome's UA with the bot UA appended (`crawl.browser_user_agent`). See docs/COMPLIANCE.md
+- ROADMAP updated for what has shipped
 ### Packaging
 - `metalscout.agents` is now in non-editable installs (`packages.find`), and the agent prompts moved to `metalscout/prompts/agents/` as package data. `prompts/master_prompt.md` stays where it was
 

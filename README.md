@@ -70,6 +70,16 @@ Scored 0–100 from the facts on the company's own site (weights are in `metalsc
 
 Traders, dealers and stockists are capped at 15 points and left out of the Leads tab. Tier **A ≥ 65**, **B ≥ 40**.
 
+## Development
+
+```
+pip install -e .[engine,dev] && python -m playwright install chromium
+python -m pytest -q          # Postgres tests use pgserver or TEST_DATABASE_URL, and skip if neither exists
+ruff check . && mypy         # both run in CI (.github/workflows/tests.yml)
+```
+
+The cloud engine installs exact, hashed versions from `requirements-engine.lock`. After changing `requirements*.txt`, regenerate the locks with the `uv pip compile …` command printed at the top of each `.lock` file.
+
 ## Documentation
 
 | Doc | What's in it |
