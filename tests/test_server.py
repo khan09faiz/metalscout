@@ -37,3 +37,16 @@ def test_public_host_requires_password(cfg, monkeypatch):
         assert e.code == 503
     finally:
         srv.shutdown()
+
+
+def test_vercel_rewrite_path(cfg):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(cfg))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    try:
+        assert b"MetalScout" in urllib.request.urlopen(base + "/api/index?__path=/").read()
+        assert b"MetalScout" in urllib.request.urlopen(base + "/api/index").read()
+        assert b"loadStatus" in urllib.request.urlopen(base + "/api/index?__path=/app.js").read()
+        assert json.load(urllib.request.urlopen(base + "/api/index?__path=/api/status"))["counts"]["leads"] == 0
+    finally:
+        srv.shutdown()
