@@ -177,6 +177,7 @@ def test_failed_call_is_retried_and_redo_resets(site, cfg, llm):
     db = engine.open_db(cfg)
     db.add_company(reg_domain(site), site, "test", "manual")
     llm["fail"] = 100  # every model call rate-limited
+    cfg["agents"]["max_wait_s"] = 0  # don't wait out cooldowns in this test
     res = engine.run(cfg, "test", stages=("profile", "agents"))
     assert res["stats"].get("agent_retry_later") == 1 and res["stats"]["agent_companies"] == 0
     assert len(db.companies_for_agents(10)) == 1  # not marked done -> retried next run
@@ -185,3 +186,19 @@ def test_failed_call_is_retried_and_redo_resets(site, cfg, llm):
     assert leads.build(db, cfg)[0]["ai"]["has_any"]
     engine.run(cfg, "test", stages=("redo-agents",))
     assert not leads.build(db, cfg)[0]["ai"]["has_any"] and len(db.companies_for_agents(10)) == 1
+
+
+def test_transient_503_waits_and_recovers(cfg, llm, monkeypatch):
+    """One provider, a temporary 503: the router waits out the short cooldown instead of failing every call."""
+    import metalscout.agents.llm as L
+    slept = []
+    monkeypatch.setattr(L.time, "sleep", lambda s: slept.append(s))
+    real_time = L.time.time
+    clock = {"t": real_time()}
+    monkeypatch.setattr(L.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(L.time, "sleep", lambda s: (slept.append(s), clock.__setitem__("t", clock["t"] + s)))
+    llm["fail"] = 1
+    r = Router(cfg)
+    res = r.complete("small", "**Sorter**", "x")
+    assert res.data["org_type"] == "manufacturer"
+    assert any(25 <= s <= 61 for s in slept)  # waited out the cooldown

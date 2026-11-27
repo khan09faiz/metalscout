@@ -83,6 +83,7 @@ class Router:
         self.order: list[str] = ac.get("order", ["groq", "cerebras", "gemini", "openrouter", "ollama"])
         self.max_calls: int = ac.get("max_calls_per_run", 150)
         self.timeout: float = ac.get("timeout_s", 60)
+        self.max_wait_s: float = ac.get("max_wait_s", 90)  # per call, when every provider is cooling down
         self.calls = 0
         self.providers: list[Provider] = []
         overrides = ac.get("providers", {}) or {}
@@ -142,20 +143,30 @@ class Router:
             raise BudgetExceeded(f"agent call budget ({self.max_calls}) used up")
         errors: list[str] = []
         other = "large" if tier == "small" else "small"
-        for p in self.providers:
-            if time.time() < p.cooldown_until:
-                continue
-            tried: set[str] = set()
-            while True:
-                model = p.pick(tier) or p.pick(other)
-                if not model or model in tried:
-                    break
-                tried.add(model)
-                res, provider_down = self._try(p, model, system, user, want_json, max_tokens, errors)
-                if res:
-                    return res
-                if provider_down:
-                    break
+        waited = 0.0
+        for _round in range(4):
+            for p in self.providers:
+                if time.time() < p.cooldown_until:
+                    continue
+                tried: set[str] = set()
+                while True:
+                    model = p.pick(tier) or p.pick(other)
+                    if not model or model in tried:
+                        break
+                    tried.add(model)
+                    res, provider_down = self._try(p, model, system, user, want_json, max_tokens, errors)
+                    if res:
+                        return res
+                    if provider_down:
+                        break
+            # everyone is cooling down (rate limit / temporary outage): wait for the soonest one, briefly
+            soonest = min((p.cooldown_until for p in self.providers if p.pick(tier) or p.pick(other)), default=0)
+            gap = soonest - time.time()
+            if gap <= 0 or waited + gap > self.max_wait_s:
+                break
+            log.info("agents: all providers cooling down, waiting %.0fs", gap)
+            time.sleep(gap)
+            waited += gap
         raise RuntimeError("all providers failed: " + ", ".join(errors[-6:]) if errors else "no provider available")
 
     def _try(self, p: Provider, model: str, system: str, user: str, want_json: bool, max_tokens: int,
@@ -179,7 +190,9 @@ class Router:
                 body.pop("response_format")  # some free models reject JSON mode; rely on the prompt
                 continue
             if r.status_code in (402, 403, 429) or r.status_code >= 500:
-                p.cooldown_until = time.time() + (60 if r.status_code == 429 else 300)
+                # 5xx = temporary overload: short pause; 429 = rate limit; 402/403 = quota/auth: give up for the run
+                pause = 30 if r.status_code >= 500 else 60 if r.status_code == 429 else 3600
+                p.cooldown_until = time.time() + pause
                 errors.append(f"{p.name}:{r.status_code}")
                 return None, True
             if r.status_code >= 400:
