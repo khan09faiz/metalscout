@@ -15,4 +15,8 @@ os.environ.setdefault("METALSCOUT_DATA_DIR", "/tmp/metalscout")  # Vercel's file
 from metalscout import config  # noqa: E402
 from metalscout.server import make_handler  # noqa: E402
 
-handler = make_handler(config.load())
+_Handler = make_handler(config.load())
+
+
+class handler(_Handler):  # noqa: N801 - Vercel looks for a top-level class named `handler`
+    pass
