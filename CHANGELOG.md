@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 (unreleased)
+### Security
+- Engine workflow: `stages` and the trigger reach bash through `env:` only and are validated against `^[a-z,-]+$`; the dashboard and the `run --stages` CLI reject unknown stage names (400 / exit 2)
+- Local dashboard: `Host` allowlist (DNS rebinding), POSTs must be JSON, cross-origin `Origin` refused (CSRF), all with 403; new `web.allowed_hosts` for LAN names
+- SSRF: in-browser requests to non-public hosts are blocked, a navigation that ends on a private host is discarded and stops the crawl, robots.txt is never fetched from (or redirected to) a private host; DNS checks cached per host
+- 500 responses no longer echo exception text (it is logged instead)
+- Dashboard login: 10 failed attempts per IP per 10 minutes, then 429
+- GitHub Actions pinned to commit SHAs
+
 ## 1.1.0 (2026-11-26)
 - **Agent crew** (optional, free models): a rules-based orchestrator routes each lead to the Sorter (small model), Analyst (large), Writer (large, Tier A/B only) and Scout (buyer-signal pages)
 - **Model router** over free OpenAI-compatible providers: Groq, Cerebras, Gemini, OpenRouter `openrouter/free`, local Ollama. Models are discovered at run time, with fallback on rate limits and a per-run call budget; tiny models are never used for the large tier

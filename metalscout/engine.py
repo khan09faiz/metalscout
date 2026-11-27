@@ -20,6 +20,16 @@ from . import extract as X
 from .db import DB
 
 log = logging.getLogger("metalscout")
+STAGES = ("discover", "profile", "signals", "agents", "redo-agents", "export")
+
+
+def parse_stages(s: str) -> tuple[str, ...]:
+    """Comma-separated stage list -> tuple. Raises ValueError on an empty list or any unknown stage."""
+    out = tuple(x.strip() for x in str(s).split(",") if x.strip())
+    bad = [x for x in out if x not in STAGES]
+    if bad or not out:
+        raise ValueError(f"unknown stage(s): {', '.join(bad)}" if bad else "no stages given")
+    return out
 
 
 def setup_logging(cfg: dict) -> None:

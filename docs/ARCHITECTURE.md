@@ -80,6 +80,12 @@ Hits are routed as follows:
 Local: `serve` + Task Scheduler. Cloud (docs/DEPLOY.md): GitHub Actions `engine.yml` runs the engine against Neon; Vercel serves `api/index.py` (the same handler) with `DASHBOARD_PASSWORD`, and "Find leads now" calls the GitHub `workflow_dispatch` API.
 
 ## Security
-- The dashboard binds to 127.0.0.1 and has no auth, so don't expose it. Static file serving is confined to `web/`.
-- All page-derived text is escaped in the UI, and only http(s) links are rendered.
+- The local dashboard binds to 127.0.0.1. It answers only requests whose `Host` is `localhost`, `127.0.0.1` or `web.host` (with the port), plus any names in `web.allowed_hosts`; this blocks DNS-rebinding pages. On Vercel the platform routes by host, so this check is skipped there.
+- CSRF: every POST must be `Content-Type: application/json`, and a request carrying an `Origin` header must come from the dashboard's own host. Anything else gets 403.
+- `DASHBOARD_PASSWORD` turns on HTTP Basic auth (required on Vercel). Ten failed logins per client IP in 10 minutes give 429 until the window passes, even for the right password. The counter is in memory, per process.
+- Run requests accept only the stage names in `engine.STAGES` (server 400, CLI exit 2). The Actions workflow passes inputs through `env:` and validates them in bash; it never interpolates `${{ }}` into a script. Actions are pinned to commit SHAs.
+- A 500 returns `{"error": "internal error"}`; the exception is written to the log, never to the client.
+- SSRF: `net.host_is_public()` (cached per host) rejects private, loopback, link-local, CGNAT, metadata and unspecified addresses. It is applied to the seed URL, to robots.txt (each redirect hop is checked *before* it is requested), to every in-browser request through a Playwright route handler, and to `page.url` after every navigation: a redirect that lands on a private host is discarded and the site's crawl stops. `crawl.allow_private_hosts: true` turns all of this off (tests only).
+  - Residual: Playwright does not run route handlers on redirect hops, so a site that redirects into a private address still causes one blind GET to it (the response is thrown away). Chromium also resolves DNS separately from our check. For hard isolation, run the engine where it has no route to internal networks (GitHub-hosted runners have none).
+- Static file serving is confined to `web/`. All page-derived text is escaped in the UI, and only http(s) links are rendered.
 - Page content is treated as data. It is never executed or followed as instructions.

@@ -29,7 +29,7 @@ DEFAULTS: dict = {
             "tier_a": 65, "tier_b": 40},
     "schedule": {"daily_at": "06:30", "enabled": True},
     "export": {"dir": "exports", "keep_days": 30, "gsheet_id": "", "gsheet_creds": ""},
-    "web": {"host": "127.0.0.1", "port": 8000},
+    "web": {"host": "127.0.0.1", "port": 8000, "allowed_hosts": []},  # extra Host names accepted (LAN use)
     "compliance": {"do_not_contact": []},
     "agents": {"enabled": True, "order": ["groq", "cerebras", "gemini", "openrouter", "ollama"],
                "companies_per_run": 40, "signals_per_run": 30, "max_calls_per_run": 150, "timeout_s": 60,

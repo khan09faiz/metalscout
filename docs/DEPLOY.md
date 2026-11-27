@@ -36,7 +36,9 @@ Then go to Actions → **engine** → Run workflow. It also runs daily at 01:00 
 | `DATABASE_URL` | same Neon string (auto-added if you used the Vercel → Neon integration) |
 | `DASHBOARD_PASSWORD` | any password; the browser asks for it (any username) |
 | `GITHUB_REPO` | `khan09faiz/metalscout` |
-| `GITHUB_DISPATCH_TOKEN` | fine-grained token for this repo only, permission **Actions: Read and write** |
+| `GITHUB_DISPATCH_TOKEN` | a **fine-grained** personal access token scoped to this one repository, with only **Actions: Read and write** (no other permissions; classic tokens are too broad) |
+
+The dashboard only sends one of the known stage names (`discover`, `profile`, `signals`, `agents`, `redo-agents`, `export`); anything else gets a 400, and the workflow itself rejects a `stages` input that isn't `a-z`, `,` and `-`. **Ten** failed logins from one IP within 10 minutes lock that IP out for the rest of the window (HTTP 429). On Vercel this counter lives per function instance, so treat it as a brake, not a guarantee, and use a long password.
 
 3. Deploy. Open the URL, log in, and click **Find leads now**. That starts the GitHub Actions run, and the dashboard shows "running" until it finishes.
 

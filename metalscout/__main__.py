@@ -21,6 +21,14 @@ from pathlib import Path
 from . import config as C
 
 
+def _stages(s: str) -> tuple[str, ...]:
+    from .engine import STAGES, parse_stages
+    try:
+        return parse_stages(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"{e} (allowed: {', '.join(STAGES)})") from None
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="metalscout")
     p.add_argument("--config", help="path to metalscout.yaml (default: ./metalscout.yaml)")
@@ -28,7 +36,7 @@ def main(argv=None):
     s.add_parser("init")
     r = s.add_parser("run")
     r.add_argument("--trigger", default="manual")
-    r.add_argument("--stages", default="discover,profile,signals,agents,export")
+    r.add_argument("--stages", type=_stages, default="discover,profile,signals,agents,export")
     r.add_argument("--profile-limit", type=int)
     sv = s.add_parser("serve")
     sv.add_argument("--no-scheduler", action="store_true")
@@ -57,7 +65,7 @@ def main(argv=None):
     cfg = C.load(args.config)
     if args.cmd == "run":
         from .engine import run
-        res = run(cfg, args.trigger, tuple(x.strip() for x in args.stages.split(",") if x.strip()), args.profile_limit)
+        res = run(cfg, args.trigger, args.stages, args.profile_limit)
         print(json.dumps(res, indent=2, default=str))
         sys.exit(0 if res["status"] != "failed" else 1)
     if args.cmd == "serve":

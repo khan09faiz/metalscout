@@ -1,10 +1,11 @@
 """Network boundary: domain helpers, public-host check, robots.txt cache."""
 from __future__ import annotations
 
+import functools
 import ipaddress
 import socket
 import urllib.robotparser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import tldextract
@@ -23,9 +24,9 @@ def host_matches(url_or_domain: str, domains) -> bool:
     return any(d == x or d.endswith("." + x) for x in domains)
 
 
-def is_public(url: str) -> bool:
-    """Reject private, loopback, link-local and metadata addresses (SSRF guard for crawled links)."""
-    host = urlparse(url).hostname
+@functools.lru_cache(maxsize=4096)
+def host_is_public(host: str) -> bool:
+    """True only if every address the host resolves to is public. Cached per host for the process."""
     if not host:
         return False
     try:
@@ -33,26 +34,54 @@ def is_public(url: str) -> bool:
     except OSError:
         return False
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+                or ip.is_unspecified or not ip.is_global):
             return False
     return True
 
 
+def is_public(url: str) -> bool:
+    """Reject private, loopback, link-local and metadata addresses (SSRF guard for crawled links)."""
+    return host_is_public((urlparse(url).hostname or "").lower())
+
+
 class Robots:
-    def __init__(self):
-        self.cache: dict[str, urllib.robotparser.RobotFileParser] = {}
+    def __init__(self, allow_private: bool = False):
+        self.allow_private = allow_private
+        self.cache: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+
+    def _ok(self, url: str) -> bool:
+        return self.allow_private or is_public(url)
+
+    async def _fetch(self, url: str) -> urllib.robotparser.RobotFileParser | None:
+        """Parsed robots.txt, or None when a redirect leads to a non-public host (then nothing is allowed).
+        Redirects are followed by hand so every hop is checked *before* it is requested."""
+        rp = urllib.robotparser.RobotFileParser()
+        try:
+            async with httpx.AsyncClient(timeout=8, headers={"User-Agent": UA}, follow_redirects=False) as c:
+                for _ in range(5):
+                    if not self._ok(url):
+                        return None
+                    r = await c.get(url)
+                    if r.is_redirect and r.headers.get("location"):
+                        url = urljoin(url, r.headers["location"])
+                        continue
+                    rp.parse(r.text.splitlines() if r.status_code == 200 else [])
+                    return rp
+        except Exception:
+            pass
+        rp.parse([])
+        return rp
 
     async def allowed(self, url: str) -> bool:
+        if not self._ok(url):
+            return False
         p = urlparse(url)
         base = f"{p.scheme}://{p.netloc}"
         if base not in self.cache:
-            rp = urllib.robotparser.RobotFileParser()
-            try:
-                async with httpx.AsyncClient(timeout=8, headers={"User-Agent": UA}, follow_redirects=True) as c:
-                    r = await c.get(base + "/robots.txt")
-                rp.parse(r.text.splitlines() if r.status_code == 200 else [])
-            except Exception:
-                rp.parse([])
-            self.cache[base] = rp
-        return self.cache[base].can_fetch(UA, url)
+            self.cache[base] = await self._fetch(base + "/robots.txt")
+        rp = self.cache[base]
+        return rp is not None and rp.can_fetch(UA, url)
