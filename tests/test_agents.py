@@ -29,8 +29,9 @@ REPLIES = {
 }
 
 
-def fake_server(fail_first=0):
+def fake_server(fail_first=0, replies=None):
     state = {"calls": 0, "fail": fail_first}
+    replies = REPLIES if replies is None else replies
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -54,7 +55,7 @@ def fake_server(fail_first=0):
                 state["fail"] -= 1
                 return self._json(429, {"error": "rate limited"})
             system = body["messages"][0]["content"]
-            reply = next(v for k, v in REPLIES.items() if f"**{k}**" in system)
+            reply = next(v for k, v in replies.items() if f"**{k}**" in system)
             self._json(200, {"choices": [{"message": {"content": json.dumps(reply)}}], "usage": {"total_tokens": 42}})
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)

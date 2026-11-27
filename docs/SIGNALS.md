@@ -22,7 +22,7 @@ Every observation is `(signal, value, num, source_url, evidence)`. The profiler 
 | `CHALLENGED` | bot-challenge page | — | status=challenged |
 
 ## Agent signals (optional crew, see AGENTS.md)
-Stored only if the agent's `quote` is found in the crawled text; `source_url` is the page it was found on and `evidence` is the quote.
+Stored only if the agent's `quote` is found in the crawled text **and** backs the value (`ground.supports`: the quote must match the metal's regex, contain the volume number, contain the person's name, or share a 4+ letter word with the product name). `source_url` is the page it was found on and `evidence` is the quote.
 
 | Signal | From | Value | Used in score |
 |---|---|---|---|
@@ -32,7 +32,7 @@ Stored only if the agent's `quote` is found in the crawled text; `source_url` is
 | `AGENT_PRODUCT` | Analyst | product name | — |
 | `AGENT_PERSON` | Analyst | `Name — Title` | — |
 | `AGENT_BUYING_SIGNAL` | Analyst | expansion / vendor registration / RFQ text | counts as intent |
-| `AGENT_OUTREACH` | Writer | JSON `{subject, body}` draft, never sent | — |
+| `AGENT_OUTREACH` | Writer | JSON `{subject, body}` draft, never sent. `evidence` is `draft, not sent`, plus `; unverified numbers: …` when the draft has numbers that aren't in the facts it was given (shown as a warning in the lead drawer) | — |
 
 ## Rules worth knowing
 - **Emails** come only from the page: plain text, `mailto:`, `name [at] domain [dot] com`, and Cloudflare `data-cfemail`. Placeholders (`name@company.com`), image filenames and noreply addresses are dropped. Nothing is pattern-guessed.

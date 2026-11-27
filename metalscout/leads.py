@@ -58,7 +58,10 @@ def _ai(obs: list[dict]) -> dict:
             try:
                 out["outreach"] = json.loads(o["value"])
             except ValueError:
-                pass
+                continue
+            ev = o.get("evidence") or ""
+            i = ev.find("unverified numbers:")
+            out["outreach"]["warning"] = ev[i:] if i >= 0 else ""
     out["has_any"] = bool(out["org_type"] or out["outreach"] or any(out[k] for k in ("materials", "volume", "people", "products", "buying_signals")))
     return out
 

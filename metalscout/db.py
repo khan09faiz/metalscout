@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies(
   id INTEGER PRIMARY KEY, domain TEXT UNIQUE NOT NULL, website TEXT, name TEXT,
@@ -41,7 +41,8 @@ CREATE INDEX IF NOT EXISTS ix_agent_runs ON agent_runs(run_id);
 # columns added after v1 (ALTER TABLE ... ADD COLUMN, applied if missing)
 MIGRATIONS = [("companies", "digest", "TEXT DEFAULT ''"), ("companies", "agents_run", "TEXT DEFAULT ''"),
               ("buyer_signals", "digest", "TEXT DEFAULT ''"), ("buyer_signals", "agent", "TEXT DEFAULT ''"),
-              ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0")]
+              ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0"),
+              ("companies", "agent_attempts", "INTEGER DEFAULT 0"), ("buyer_signals", "agent_attempts", "INTEGER DEFAULT 0")]
 
 
 class Row(dict):
@@ -176,7 +177,8 @@ class DB:
             "INSERT INTO observations(company_id,run_id,signal,value,num,source_url,evidence,observed_at) VALUES(?,?,?,?,?,?,?,?)",
             [(company_id, run_id, o["signal"], str(o.get("value", "")), o.get("num"), o.get("source_url", ""),
               (o.get("evidence") or "")[:400], t) for o in obs])
-        self.c.execute("UPDATE companies SET name=COALESCE(NULLIF(?,''),name), status=?, last_profiled=?, last_profile_run=?, error=? WHERE id=?",
+        self.c.execute("UPDATE companies SET name=COALESCE(NULLIF(?,''),name), status=?, last_profiled=?, last_profile_run=?, error=?, "
+                       "agent_attempts=0 WHERE id=?",
                        (name, status, t, run_id, error, company_id))
         self.c.commit()
 
@@ -251,15 +253,26 @@ class DB:
         self.c.execute("UPDATE companies SET digest=? WHERE id=?", (digest[:12000], company_id))
         self.c.commit()
 
-    def companies_for_agents(self, limit: int) -> list:
-        """Profiled companies whose latest profile has not been through the agents yet."""
+    def companies_for_agents(self, limit: int, max_attempts: int = 3) -> list:
+        """Profiled companies whose latest profile has not been through the agents yet. Rows whose model calls
+        failed `max_attempts` times are left out; fewer failures go first, so they can't starve new work."""
         return self.c.execute(
             "SELECT * FROM companies WHERE status='profiled' AND COALESCE(digest,'')<>'' "
-            "AND COALESCE(agents_run,'')<>COALESCE(last_profile_run,'') ORDER BY last_profiled DESC LIMIT ?", (limit,)).fetchall()
+            "AND COALESCE(agents_run,'')<>COALESCE(last_profile_run,'') AND COALESCE(agent_attempts,0) < ? "
+            "ORDER BY COALESCE(agent_attempts,0), last_profiled DESC LIMIT ?", (max_attempts, limit)).fetchall()
 
-    def signals_for_agents(self, limit: int) -> list:
+    def signals_for_agents(self, limit: int, max_attempts: int = 3) -> list:
         return self.c.execute("SELECT * FROM buyer_signals WHERE COALESCE(agent_checked,0)=0 AND opened<>-1 "
-                              "ORDER BY intent DESC, first_seen DESC LIMIT ?", (limit,)).fetchall()
+                              "AND COALESCE(agent_attempts,0) < ? "
+                              "ORDER BY COALESCE(agent_attempts,0), intent DESC, first_seen DESC LIMIT ?",
+                              (max_attempts, limit)).fetchall()
+
+    def agent_failed(self, table: str, row_id: int) -> None:
+        """Count one failed agent attempt on a company or buyer signal."""
+        if table not in ("companies", "buyer_signals"):
+            raise ValueError(table)
+        self.c.execute(f"UPDATE {table} SET agent_attempts=COALESCE(agent_attempts,0)+1 WHERE id=?", (row_id,))
+        self.c.commit()
 
     def add_observations(self, company_id: int, run_id: str, obs: list[dict]) -> None:
         t = now()
@@ -272,12 +285,12 @@ class DB:
     def reset_agents(self) -> None:
         """Forget all agent output so the crew re-analyses everything on the next 'agents' stage."""
         self.c.execute("DELETE FROM observations WHERE substr(signal, 1, 6) = 'AGENT_'")
-        self.c.execute("UPDATE companies SET agents_run = ''")
-        self.c.execute("UPDATE buyer_signals SET agent_checked = 0, agent = ''")
+        self.c.execute("UPDATE companies SET agents_run = '', agent_attempts = 0")
+        self.c.execute("UPDATE buyer_signals SET agent_checked = 0, agent = '', agent_attempts = 0")
         self.c.commit()
 
     def mark_agents_done(self, company_id: int, profile_run: str) -> None:
-        self.c.execute("UPDATE companies SET agents_run=? WHERE id=?", (profile_run, company_id))
+        self.c.execute("UPDATE companies SET agents_run=?, agent_attempts=0 WHERE id=?", (profile_run, company_id))
         self.c.commit()
 
     def log_agent(self, run_id: str, company_id: int | None, agent: str, provider: str, model: str, ok: bool,

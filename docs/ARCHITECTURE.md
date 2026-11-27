@@ -44,9 +44,9 @@ Each stage is wrapped in its own try/except, so a failed stage doesn't stop the 
 ## Data model
 | Table | Key columns | Notes |
 |---|---|---|
-| `companies` | domain (unique), website, name, status, stage, last_profile_run | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
+| `companies` | domain (unique), website, name, status, stage, last_profile_run, agents_run, agent_attempts | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
 | `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only; latest run per company is the current view |
-| `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened | marketplace/tender/social/csv |
+| `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened, agent_checked, agent_attempts | marketplace/tender/social/csv |
 | `runs` | id, trigger, started, finished, status, stats(json), errors(json) | powers the Runs tab and "ran today?" |
 | `kv` | query_cursor, query_total, schema_version | |
 

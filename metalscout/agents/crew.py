@@ -6,8 +6,9 @@
       ├─ Writer      large model   only Tier A/B after analysis: first-email draft (never sent)
       └─ Scout       small model   buyer-signal pages (tenders, buy leads): buyer, items, qty, deadline
 
-Every agent fact goes through ground.locate(): its quote must exist in the crawled text, or it is dropped
-and counted as `rejected`. Each call is logged in agent_runs (agent, provider, model, latency, ok, rejected).
+Every agent fact goes through ground.locate() (its quote must exist in the crawled text) and ground.supports()
+(the quote must back the value: the metal, the number, the name); otherwise it is dropped and counted as `rejected`.
+Writer drafts are stored with any number that isn't in the facts flagged as "unverified numbers". Each call is logged in agent_runs (agent, provider, model, latency, ok, rejected).
 The orchestrator is the only place that decides *who* runs, so adding an agent = one prompt + one branch here.
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 from .. import extract as X
 from .. import fit
 from ..db import DB
-from .ground import locate
+from .ground import locate, supports, unverified_numbers
 from .llm import BudgetExceeded, Router
 
 log = logging.getLogger("metalscout.agents")
@@ -38,6 +39,7 @@ class Crew:
         self.db, self.cfg, self.run_id, self.stats, self.errors = db, cfg, run_id, stats, errors
         self.router = router or Router(cfg)
         self.ac = cfg.get("agents", {})
+        self._failed = False
         for k in ("agent_companies", "agent_calls", "agent_facts", "agent_rejected", "agent_signals"):
             stats.setdefault(k, 0)
 
@@ -56,13 +58,15 @@ class Crew:
         self.stats["agent_calls"] += 1
         return res
 
-    def _ground(self, items, digest: str, signal: str, value_fn, num_fn=None) -> tuple[list[dict], int]:
+    def _ground(self, items, digest: str, signal: str, value_fn, num_fn=None, field: str = "") -> tuple[list[dict], int]:
+        """Keep items whose quote is on the page (locate) and backs the item's `field` value (supports)."""
         kept, rejected = [], 0
         for it in items or []:
             if not isinstance(it, dict):
                 continue
-            url = locate(str(it.get("quote", "")), digest)
-            if not url:
+            quote = str(it.get("quote", ""))
+            url = locate(quote, digest)
+            if not url or not supports(it.get(field) if field else value_fn(it), quote, signal):
                 rejected += 1
                 continue
             v = value_fn(it)
@@ -90,7 +94,8 @@ class Crew:
             if res and res.data:
                 d = res.data
                 url = locate(str(d.get("quote", "")), digest)
-                ok = bool(url) and d.get("org_type") in ("manufacturer", "trader", "both", "service", "unknown")
+                ok = (bool(url) and d.get("org_type") in ("manufacturer", "trader", "both", "service", "unknown")
+                      and supports(d.get("org_type"), str(d.get("quote", "")), "AGENT_ORG_TYPE"))
                 if ok:
                     conf = float(d.get("confidence") or 0)
                     new.append({"signal": "AGENT_ORG_TYPE", "value": d["org_type"], "num": conf, "source_url": url,
@@ -107,16 +112,16 @@ class Crew:
             res = self._call("analyst", "large", f"WEBSITE TEXT:\n{text}", cid, max_tokens=1500)
             if res and res.data:
                 d, r0 = res.data, rejected
-                for items, signal, vf, nf in (
-                    (d.get("products"), "AGENT_PRODUCT", lambda i: str(i.get("name", ""))[:120], None),
+                for items, signal, vf, nf, field in (
+                    (d.get("products"), "AGENT_PRODUCT", lambda i: str(i.get("name", ""))[:120], None, "name"),
                     ([m for m in d.get("raw_materials") or [] if isinstance(m, dict) and m.get("metal") in METAL_KEYS],
-                     "AGENT_MATERIAL", lambda i: f"{i['metal']}: {str(i.get('form', '')).strip()}".strip(": ")[:160], None),
+                     "AGENT_MATERIAL", lambda i: f"{i['metal']}: {str(i.get('form', '')).strip()}".strip(": ")[:160], None, "metal"),
                     (d.get("people"), "AGENT_PERSON",
-                     lambda i: f"{str(i.get('name', '')).strip()} — {str(i.get('title', '')).strip()}".strip(" —")[:160], None),
-                    (d.get("buying_signals"), "AGENT_BUYING_SIGNAL", lambda i: str(i.get("text", ""))[:200], None),
-                    ([d["volume"]] if isinstance(d.get("volume"), dict) else [], "AGENT_VOLUME", _vol_text, _vol_kg_month),
+                     lambda i: f"{str(i.get('name', '')).strip()} — {str(i.get('title', '')).strip()}".strip(" —")[:160], None, "name"),
+                    (d.get("buying_signals"), "AGENT_BUYING_SIGNAL", lambda i: str(i.get("text", ""))[:200], None, ""),
+                    ([d["volume"]] if isinstance(d.get("volume"), dict) else [], "AGENT_VOLUME", _vol_text, _vol_kg_month, "value"),
                 ):
-                    kept, rej = self._ground(items, digest, signal, vf, nf)
+                    kept, rej = self._ground(items, digest, signal, vf, nf, field)
                     new += kept
                     rejected += rej
                 self.db.log_agent(self.run_id, cid, "analyst", res.provider, res.model, True, res.latency_ms, res.tokens,
@@ -133,13 +138,19 @@ class Crew:
                     f"PROSPECT: {c['name'] or c['domain']} ({c['website']})\nVERIFIED FACTS:\n" + "\n".join(facts[:20]))
             res = self._call("writer", "large", user, cid, max_tokens=600)
             if res and res.data and res.data.get("body"):
-                new.append({"signal": "AGENT_OUTREACH", "value": json.dumps({"subject": res.data.get("subject", ""),
-                            "body": res.data["body"]}, ensure_ascii=False), "source_url": "", "evidence": "draft, not sent"})
+                subject, body = str(res.data.get("subject", "")), str(res.data["body"])
+                unverified = unverified_numbers(f"{subject}\n{body}", user)
+                evidence = "draft, not sent" + (f"; unverified numbers: {', '.join(unverified)}" if unverified else "")
+                if unverified:
+                    self.stats["agent_unverified_drafts"] = self.stats.get("agent_unverified_drafts", 0) + 1
+                new.append({"signal": "AGENT_OUTREACH", "value": json.dumps({"subject": subject, "body": body}, ensure_ascii=False),
+                            "source_url": "", "evidence": evidence})
                 self.db.log_agent(self.run_id, cid, "writer", res.provider, res.model, True, res.latency_ms, res.tokens)
 
         if self._failed:
             # a model call failed (rate limit, retired model, outage): store nothing, retry next run
             self.stats["agent_retry_later"] = self.stats.get("agent_retry_later", 0) + 1
+            self.db.agent_failed("companies", cid)
             log.info("agents %-30s a call failed; will retry next run", c["domain"])
             return
         self.db.add_observations(cid, prun, new)
@@ -152,7 +163,13 @@ class Crew:
     def run_signal(self, s) -> None:
         text = s["digest"] or f"{s['title']}\n{s['snippet']}"
         digest = f"### PAGE {s['url']}\n{text}"
+        self._failed = False
         res = self._call("scout", "small", f"PAGE TEXT:\n{text[:6000]}", None, max_tokens=700)
+        if self._failed:
+            # the model call failed: leave the signal unchecked so a later run retries it (up to max_attempts)
+            self.stats["agent_retry_later"] = self.stats.get("agent_retry_later", 0) + 1
+            self.db.agent_failed("buyer_signals", s["id"])
+            return
         out: dict = {}
         rejected = 0
         if res and res.data:
@@ -183,9 +200,10 @@ class Crew:
             return
         self.stats["agents"] = "on: " + ", ".join(f"{r['provider']}({r['small']}|{r['large']})" for r in self.router.roster())
         try:
-            for c in self.db.companies_for_agents(company_limit):
+            tries = int(self.ac.get("max_attempts", 3))
+            for c in self.db.companies_for_agents(company_limit, tries):
                 self.run_company(c)
-            for s in self.db.signals_for_agents(signal_limit):
+            for s in self.db.signals_for_agents(signal_limit, tries):
                 self.run_signal(s)
         except BudgetExceeded as e:
             self.stats["agents_note"] = str(e)

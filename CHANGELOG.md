@@ -8,6 +8,12 @@
 - 500 responses no longer echo exception text (it is logged instead)
 - Dashboard login: 10 failed attempts per IP per 10 minutes, then 429
 - GitHub Actions pinned to commit SHAs
+### Agents
+- A Scout call that fails no longer marks the buyer signal as checked; it is retried next run (`agent_retry_later`)
+- `agent_attempts` on companies and buyer signals (schema v3): rows that keep failing go to the back of the queue and are skipped after `agents.max_attempts` (default 3), so they can't use up the call budget
+- Grounding gate checks that a quote *supports* the fact (`ground.supports`: metal regex, volume number, person name, product word), not just that it exists; failures count as rejected
+- Writer drafts with numbers that aren't in the given facts are stored with `unverified numbers: …` and shown with a warning in the lead drawer
+- Prompts state that page text is untrusted data and that instructions in it must be ignored; a test proves model output never becomes a crawl URL or a contact
 ### Packaging
 - `metalscout.agents` is now in non-editable installs (`packages.find`), and the agent prompts moved to `metalscout/prompts/agents/` as package data. `prompts/master_prompt.md` stays where it was
 

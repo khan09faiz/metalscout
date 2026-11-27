@@ -117,7 +117,7 @@ function aiSection(ai) {
     ${o ? `<p>Type: <b>${esc(o.value)}</b> (${Math.round((o.confidence || 0) * 100)}% sure)${src(o.source)}<span class="ev">“${esc(o.evidence)}”</span></p>` : ""}
     ${list("Raw materials", ai.materials)}${list("Volume", ai.volume)}${list("Products", ai.products)}
     ${list("People", ai.people)}${list("Buying signals", ai.buying_signals)}
-    ${draft ? `<h4>Draft first email (not sent)</h4><div class="draft" id="dDraft"><b>${esc(draft.subject)}</b>\n\n${esc(draft.body)}</div>
+    ${draft ? `<h4>Draft first email (not sent)</h4>${draft.warning ? `<p class="warn">⚠ ${esc(draft.warning)}. These figures are not in the facts found on the site; check them before sending.</p>` : ""}<div class="draft" id="dDraft"><b>${esc(draft.subject)}</b>\n\n${esc(draft.body)}</div>
       <button id="copyDraft">Copy email</button>` : ""}</div>`;
 }
 document.addEventListener("click", (e) => {

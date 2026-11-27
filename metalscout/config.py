@@ -33,7 +33,7 @@ DEFAULTS: dict = {
     "compliance": {"do_not_contact": []},
     "agents": {"enabled": True, "order": ["groq", "cerebras", "gemini", "openrouter", "ollama"],
                "companies_per_run": 40, "signals_per_run": 30, "max_calls_per_run": 150, "timeout_s": 60,
-               "min_confidence": 0.7, "write_for_tiers": ["A", "B"], "analyst_max_chars": 12000, "providers": {}},
+               "min_confidence": 0.7, "max_attempts": 3, "write_for_tiers": ["A", "B"], "analyst_max_chars": 12000, "providers": {}},
 }
 
 
