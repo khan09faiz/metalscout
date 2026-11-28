@@ -21,7 +21,7 @@ import httpx
 
 from . import extract as X
 from .db import DB
-from .net import host_matches, reg_domain
+from .net import homepage, host_matches, reg_domain
 
 log = logging.getLogger("metalscout.sources")
 JUNK_URL = re.compile(r"aclick|/ads?/|doubleclick|googleadservices|/search\?|bing\.com/ck", re.I)
@@ -98,25 +98,30 @@ def route(hit: dict, cfg: dict) -> str:
     return "company"
 
 
-def discover(db: DB, cfg: dict, run_id: str, stats: dict, errors: list[str]) -> None:
+def discover(db: DB, cfg: dict, run_id: str, stats: dict, warnings: list[str]) -> None:
+    """Failed searches are warnings. If searching stops (5 failures) before any query worked, the stage fails."""
     batch = next_batch(db, cfg)
     stats.update(queries=0, new_companies=0, new_signals=0, provider=provider_name(cfg))
     fails = 0
     for q in batch:
+        db.heartbeat(run_id)
         try:
             hits = search(q, cfg)
         except Exception as e:
-            errors.append(f"discover: {e}")
+            warnings.append(f"discover: {e}")
             fails += 1
             if fails >= 5:
-                errors.append("discover: stopped after 5 failed searches (provider throttling?)")
+                if not stats["queries"]:
+                    raise RuntimeError("stopped after 5 failed searches and none succeeded (provider throttling?)") from e
+                warnings.append("discover: stopped after 5 failed searches (provider throttling?)")
                 break
             continue
         stats["queries"] += 1
         for h in hits:
             kind = route(h, cfg)
             if kind == "company":
-                if db.add_company(reg_domain(h["url"]), h["url"], q, "search"):
+                # crawl from the homepage; keep the search-hit page in `source`
+                if db.add_company(reg_domain(h["url"]), homepage(h["url"]), q, f"search:{h['url']}"):
                     stats["new_companies"] += 1
             elif kind == "signal":
                 txt = f"{h['title']} {h['snippet']}"

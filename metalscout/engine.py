@@ -2,7 +2,9 @@
 
 - A file lock prevents two runs at once (web button + scheduler); stale locks (>6h) are broken.
 - Each stage's failure is recorded on the run and the next stage still runs ("a failure is an
-  observation, not silence"). Run status: ok | partial | failed.
+  observation, not silence"). Run status: ok (no stage failed) | partial (some) | failed (all).
+  Per-site / per-signal problems are warnings in stats, not errors.
+- The run beats a heartbeat while it works; a 'running' run without one for 20 min counts as dead.
 - PROFILE and SIGNALS *query* the DB for work, so an interrupted run resumes next time.
 """
 from __future__ import annotations
@@ -20,6 +22,16 @@ from . import extract as X
 from .db import DB
 
 log = logging.getLogger("metalscout")
+STAGES = ("discover", "profile", "signals", "agents", "redo-agents", "export")
+
+
+def parse_stages(s: str) -> tuple[str, ...]:
+    """Comma-separated stage list -> tuple. Raises ValueError on an empty list or any unknown stage."""
+    out = tuple(x.strip() for x in str(s).split(",") if x.strip())
+    bad = [x for x in out if x not in STAGES]
+    if bad or not out:
+        raise ValueError(f"unknown stage(s): {', '.join(bad)}" if bad else "no stages given")
+    return out
 
 
 def setup_logging(cfg: dict) -> None:
@@ -74,7 +86,7 @@ def is_running(cfg: dict, db: DB | None = None) -> bool:
         return False
 
 
-async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: list[str], limit: int | None = None) -> None:
+async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, warnings: list[str], limit: int | None = None) -> None:
     from .browser import Surfer  # Playwright only needed by the engine, not by the web dashboard
     from .agents.ground import build_digest
     pc = cfg["pipeline"]
@@ -89,20 +101,21 @@ async def stage_profile(db: DB, cfg: dict, run_id: str, stats: dict, errors: lis
                 try:
                     pages = await s.crawl(c["website"])
                     name, status, obs = profile.observe(c["website"], pages)
-                    db.save_profile(c["id"], run_id, name, status, obs, "" if status == "profiled" else status)
+                    db.save_profile(c["id"], run_id, name, status, obs, "" if status == "profiled" else status,
+                                    keep_runs=pc.get("keep_profile_runs", 3))
                     if status == "profiled":
                         db.save_digest(c["id"], build_digest(pages))
                     stats["profiled" if status == "profiled" else "profile_failed"] += 1
                     log.info("profiled %-35s %-10s %d obs", c["domain"], status, len(obs))
                 except Exception as e:
                     stats["profile_failed"] += 1
-                    db.save_profile(c["id"], run_id, "", "failed", [], str(e)[:300])
-                    errors.append(f"profile {c['domain']}: {e}")
+                    db.save_profile(c["id"], run_id, "", "failed", [], str(e)[:300], keep_runs=pc.get("keep_profile_runs", 3))
+                    warnings.append(f"profile {c['domain']}: {e}")
                 db.update_run_stats(run_id, stats)
         await asyncio.gather(*(one(c) for c in todo))
 
 
-async def stage_signals(db: DB, cfg: dict, stats: dict, errors: list[str]) -> None:
+async def stage_signals(db: DB, cfg: dict, stats: dict, warnings: list[str], run_id: str = "") -> None:
     from .browser import Surfer
     todo = db.signals_to_open(cfg["pipeline"]["signals_per_run"])
     stats.update(signals_opened=0)
@@ -110,10 +123,12 @@ async def stage_signals(db: DB, cfg: dict, stats: dict, errors: list[str]) -> No
         return
     async with Surfer(cfg) as s:
         for r in todo:
+            if run_id:
+                db.heartbeat(run_id)
             try:
                 page = await s.open(r["url"])
             except Exception as e:
-                errors.append(f"signal {r['url']}: {e}")
+                warnings.append(f"signal {r['url']}: {e}")
                 page = None
             if not page:
                 db.update_signal(r["id"], opened=-1)
@@ -125,7 +140,23 @@ async def stage_signals(db: DB, cfg: dict, stats: dict, errors: list[str]) -> No
             stats["signals_opened"] += 1
 
 
+class Warnings(list):
+    """Per-site / per-signal / per-call problems. Lives in run stats, capped; `warnings_total` counts all."""
+
+    def __init__(self, stats: dict, cap: int = 50):
+        super().__init__()
+        self.stats, self.cap = stats, cap
+        stats["warnings"], stats["warnings_total"] = self, 0
+
+    def append(self, item) -> None:
+        self.stats["warnings_total"] += 1
+        if len(self) < self.cap:
+            super().append(str(item)[:300])
+
+
 def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "signals", "agents", "export"), profile_limit: int | None = None) -> dict:
+    """Status: ok = no stage failed, partial = some stages failed, failed = every stage failed.
+    `errors` holds only stage-level exceptions; per-item problems go to stats["warnings"]."""
     setup_logging(cfg)
     db = open_db(cfg)
     with Lock(cfg):
@@ -134,17 +165,18 @@ def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "sign
             raise RuntimeError(f"run {other['id']} ({other['trigger']}) is still in progress")
         rid = db.start_run(trigger)
         stats: dict = {}
+        warnings = Warnings(stats)
         errors: list[str] = []
         failed = 0
         log.info("run %s started (%s)", rid, trigger)
         for st in stages:
             try:
                 if st == "discover":
-                    sources.discover(db, cfg, rid, stats, errors)
+                    sources.discover(db, cfg, rid, stats, warnings)
                 elif st == "profile":
-                    asyncio.run(stage_profile(db, cfg, rid, stats, errors, profile_limit))
+                    asyncio.run(stage_profile(db, cfg, rid, stats, warnings, profile_limit))
                 elif st == "signals":
-                    asyncio.run(stage_signals(db, cfg, stats, errors))
+                    asyncio.run(stage_signals(db, cfg, stats, warnings, rid))
                 elif st == "redo-agents":
                     db.reset_agents()
                     stats["agents_reset"] = True
@@ -152,7 +184,7 @@ def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "sign
                     from .agents.crew import Crew
                     ac = cfg.get("agents", {})
                     if ac.get("enabled", True):
-                        Crew(db, cfg, rid, stats, errors).run(ac.get("companies_per_run", 40), ac.get("signals_per_run", 30))
+                        Crew(db, cfg, rid, stats, warnings).run(ac.get("companies_per_run", 40), ac.get("signals_per_run", 30))
                     else:
                         stats["agents"] = "disabled in config"
                 elif st == "export":
@@ -162,7 +194,7 @@ def run(cfg: dict, trigger: str = "manual", stages=("discover", "profile", "sign
                 errors.append(f"{st}: {e}")
                 log.exception("stage %s failed", st)
             db.update_run_stats(rid, stats)
-        status = "ok" if not errors else ("failed" if failed == len(stages) else "partial")
+        status = "ok" if not failed else ("failed" if failed == len(stages) else "partial")
         db.finish_run(rid, status, stats, errors)
-        log.info("run %s %s: %s", rid, status, stats)
+        log.info("run %s %s: %s", rid, status, {k: v for k, v in stats.items() if k != "warnings"})
         return {"id": rid, "status": status, "stats": stats, "errors": errors}

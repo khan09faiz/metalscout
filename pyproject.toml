@@ -1,6 +1,6 @@
 [project]
 name = "metalscout"
-version = "1.1.0"
+version = "1.2.0"
 description = "Find manufacturers and end users that buy raw metal (India). Deterministic daily pipeline + dashboard."
 requires-python = ">=3.10"
 # core = dashboard + database (also what Vercel needs); [engine] adds the browser crawler and search
@@ -9,7 +9,7 @@ dependencies = ["phonenumbers>=8.13", "tldextract>=5", "pyyaml>=6", "httpx>=0.25
 [project.optional-dependencies]
 engine = ["playwright>=1.45", "selectolax>=0.3.21", "ddgs>=9"]
 sheets = ["gspread>=6"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "setuptools>=68", "ruff>=0.6", "mypy>=1.10"]  # setuptools: the wheel-build packaging test
 
 [project.scripts]
 metalscout = "metalscout.__main__:main"
@@ -18,11 +18,32 @@ metalscout = "metalscout.__main__:main"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["metalscout"]
+[tool.setuptools.packages.find]
+include = ["metalscout*"]
 
 [tool.setuptools.package-data]
-metalscout = ["web/*"]
+metalscout = ["web/*", "prompts/agents/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "UP", "S"]
+ignore = [
+  "E501",  # long lines are the house style
+  "E731",  # small named lambdas are used deliberately
+  "S311",  # `random` only jitters politeness delays; nothing cryptographic
+  "S603",  # flags every subprocess call; all calls pass argument lists, never a shell
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S104", "S108", "S310", "S603", "S607", "S608"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+files = ["metalscout", "api"]

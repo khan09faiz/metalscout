@@ -47,3 +47,4 @@ code{background:#eef2f7;padding:1px 5px;border-radius:4px}
 .chip.on{background:#dcfce7;border-color:#86efac;color:#166534}.chip.off{color:var(--muted)}
 .aibox{border:1px solid #ddd6fe;background:#faf5ff;border-radius:10px;padding:10px 14px;margin-top:16px}
 .draft{white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px}
+.warn{background:#fef3c7;border:1px solid #f59e0b;color:#78350f;border-radius:8px;padding:6px 10px;font-size:13px}

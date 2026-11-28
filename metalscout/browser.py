@@ -10,12 +10,13 @@ from __future__ import annotations
 import asyncio
 import random
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import async_playwright
 from selectolax.lexbor import LexborHTMLParser
 
-from .net import UA, Robots, is_public, reg_domain
+from . import net
+from .net import Robots, reg_domain, user_agents
 
 PRIORITY = [(r"contact|reach-?us|get-?in-?touch", 100), (r"about|company|profile|who-?we-?are|overview", 80),
             (r"product|industr|application|sector|customer|client|range", 60),
@@ -60,26 +61,39 @@ class Surfer:
 
     def __init__(self, cfg: dict):
         self.cfg = cfg["crawl"]
-        self.robots = Robots()
+        self.bot_ua, self.browser_ua = user_agents(cfg)
+        self.robots = Robots(allow_private=bool(self.cfg.get("allow_private_hosts")), ua=self.bot_ua)
         self._pw = self._browser = self._ctx = None
 
     async def __aenter__(self):
         self._pw = await async_playwright().start()
         self._browser = await self._pw.chromium.launch(headless=True)
-        self._ctx = await self._browser.new_context(user_agent=UA, locale="en-IN", viewport={"width": 1366, "height": 900})
+        self._ctx = await self._browser.new_context(user_agent=self.browser_ua, locale="en-IN", viewport={"width": 1366, "height": 900})
         return self
 
     async def __aexit__(self, *exc):
         await self._browser.close()
         await self._pw.stop()
 
+    async def _route(self, route) -> None:
+        """Every request the page makes: drop heavy media, and (SSRF) anything aimed at a non-public host.
+        Playwright calls this only for the first URL of a redirect chain, so callers also check page.url."""
+        req = route.request
+        if req.resource_type in ("image", "media", "font"):
+            return await route.abort()
+        u = urlparse(req.url)
+        if (u.scheme in ("http", "https", "ws", "wss") and not self.cfg.get("allow_private_hosts")
+                and not await asyncio.to_thread(net.host_is_public, (u.hostname or "").lower())):
+            return await route.abort("blockedbyclient")
+        await route.continue_()
+
     async def _new_page(self):
         page = await self._ctx.new_page()
-        await page.route("**/*", lambda r: r.abort() if r.request.resource_type in ("image", "media", "font") else r.continue_())
+        await page.route("**/*", self._route)
         return page
 
     def _ok_host(self, url: str) -> bool:
-        return self.cfg.get("allow_private_hosts") or is_public(url)
+        return bool(self.cfg.get("allow_private_hosts")) or net.is_public(url)
 
     async def open(self, url: str) -> dict | None:
         """Open a single page (used for buyer-signal pages)."""
@@ -88,6 +102,8 @@ class Surfer:
         page = await self._new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            if not self._ok_host(page.url):  # redirected to a private host: discard
+                return None
             await page.wait_for_timeout(500)
             final, text, html = await _snapshot(page)
             return {"url": final, "text": text, "html": html}
@@ -125,9 +141,14 @@ class Surfer:
                     continue
                 try:
                     await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                except Exception:  # noqa: S112  # an unreachable page is skipped; the crawl reports pages read
+                    continue
+                if not self._ok_host(page.url):  # redirected to a private host: discard and stop this site
+                    break
+                try:
                     await page.wait_for_timeout(600)
                     final, text, html = await _snapshot(page)
-                except Exception:
+                except Exception:  # noqa: S112  # page closed or navigated mid-snapshot: skip it
                     continue
                 pages.append({"url": final, "text": text, "html": html, "depth": depth})
                 await asyncio.sleep(random.uniform(c["delay_min"], c["delay_max"]))

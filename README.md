@@ -50,6 +50,7 @@ python -m metalscout add https://somecompany.in ...      # queue your own sites
 python -m metalscout import tenders.csv                  # GeM/CPPP/trade-show exports (columns: website and/or url, title)
 python -m metalscout export [--out file.xlsx]
 python -m metalscout status
+python -m metalscout mark-failed                         # close a run left 'running' by a crash
 python -m metalscout schedule install|remove|show
 ```
 
@@ -68,6 +69,16 @@ Scored 0–100 from the facts on the company's own site (weights are in `metalsc
 | Vendor-registration / RFQ / tender wording | 5 |
 
 Traders, dealers and stockists are capped at 15 points and left out of the Leads tab. Tier **A ≥ 65**, **B ≥ 40**.
+
+## Development
+
+```
+pip install -e .[engine,dev] && python -m playwright install chromium
+python -m pytest -q          # Postgres tests use pgserver or TEST_DATABASE_URL, and skip if neither exists
+ruff check . && mypy         # both run in CI (.github/workflows/tests.yml)
+```
+
+The cloud engine installs exact, hashed versions from `requirements-engine.lock`. After changing `requirements*.txt`, regenerate the locks with the `uv pip compile …` command printed at the top of each `.lock` file.
 
 ## Documentation
 

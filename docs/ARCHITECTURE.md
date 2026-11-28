@@ -4,13 +4,13 @@
 1. **Deterministic core, optional agents.** Search, crawl, regex and a scoring formula run with no model and at zero marginal cost. The agent crew (docs/AGENTS.md) is an extra stage on free models; every agent fact must quote the crawled page.
 2. **The database is the asset.** Facts are stored as *observations* `(company, signal, value, source_url, evidence, run_id, time)`. Leads are a *view* over them.
 3. **Stages chain through queries, not hand-offs.** PROFILE asks the DB "who is new or stale?" rather than taking a list from DISCOVER. A crashed run resumes by itself; re-profiling builds history.
-4. **A failure is an observation.** An unreachable site becomes `status=failed` plus an `UNREACHABLE` observation. A search ban becomes a run error. Nothing fails silently.
+4. **A failure is an observation.** An unreachable site becomes `status=failed` plus an `UNREACHABLE` observation and a run *warning*. A stage that throws (or a discover stage where every search failed) becomes a run *error*. Nothing fails silently.
 5. **Never invent.** Only values printed on a page are stored. Empty beats wrong.
 
 ## Layout
 ```
 metalscout/
-├── __main__.py     CLI (init, run, serve, add, import, export, status, schedule)
+├── __main__.py     CLI (init, run, serve, add, import, export, status, schedule, mark-failed)
 ├── config.py       YAML over defaults
 ├── db.py           SQLite schema + queries (companies, observations, buyer_signals, runs, kv)
 ├── net.py          domain helpers, public-host SSRF guard, robots.txt cache
@@ -22,6 +22,7 @@ metalscout/
 ├── leads.py        read model for UI and exports
 ├── engine.py       daily run: lock → stages → export → run record; logging
 ├── agents/         optional crew: llm.py (free-model router), crew.py (orchestrator + agents), ground.py (quote check)
+├── prompts/agents/ the agents' Markdown prompts (package data, so they ship in the wheel)
 ├── scheduler.py    in-app heartbeat + Windows Task Scheduler / cron
 ├── export.py       xlsx (5 tabs), csv, Google Sheets
 ├── server.py       stdlib HTTP JSON API + static files
@@ -40,13 +41,16 @@ metalscout/
 ```
 Each stage is wrapped in its own try/except, so a failed stage doesn't stop the others.
 
+- **Status:** `ok` = no stage failed, `partial` = some stages failed, `failed` = every stage failed. `runs.errors` holds only stage-level exceptions. Per-site, per-signal and per-model-call problems go to `stats.warnings` (first 50 kept, `stats.warnings_total` counts all), alongside the existing counters (`profile_failed`, `agent_retry_later`, …). The Runs tab shows both.
+- **Heartbeat:** the run updates `runs.heartbeat` whenever it saves stats and on every search query, buyer-signal page and agent item. A `running` run with no heartbeat for 20 minutes counts as dead: it stops blocking new runs and the dashboard stops showing "running". In GitHub Actions, a failed, timed-out or cancelled job runs `python -m metalscout mark-failed`, which closes the latest `running` run as `failed`.
+
 ## Data model
 | Table | Key columns | Notes |
 |---|---|---|
-| `companies` | domain (unique), website, name, status, stage, last_profile_run | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
-| `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only; latest run per company is the current view |
-| `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened | marketplace/tender/social/csv |
-| `runs` | id, trigger, started, finished, status, stats(json), errors(json) | powers the Runs tab and "ran today?" |
+| `companies` | domain (unique), website (the homepage, `scheme://host/`), name, status, stage, found_via (the query), source (`search:<hit URL>` / `manual:<URL>` / `csv`), last_profile_run, agents_run, agent_attempts | status: new/profiled/failed/challenged; stage: lead/contacted/replied/quoted/won/lost/not_fit |
+| `observations` | company_id, run_id, signal, value, num, source_url, evidence | append-only per run; latest run per company is the current view. After each profile, runs older than the company's last `pipeline.keep_profile_runs` (default 3) are deleted, their `AGENT_*` facts included |
+| `buyer_signals` | url (unique), kind, metals, quantity, emails, phones, intent, restricted, opened, agent_checked, agent_attempts | marketplace/tender/social/csv |
+| `runs` | id, trigger, started, heartbeat, finished, status, stats(json, incl. warnings), errors(json, stage-level only) | powers the Runs tab and "ran today?" |
 | `kv` | query_cursor, query_total, schema_version | |
 
 ## Discovery query space
@@ -59,14 +63,18 @@ Hits are routed as follows:
 
 ## Crawler
 - One Chromium per stage, `concurrency` pages in parallel across sites.
+- Starts at the homepage (`scheme://host/`): discovery and "Add sites" store that rather than the deep page a search hit or a paste pointed at.
 - Same registered domain only. Images, fonts and media are blocked for speed.
 - Priority: contact 100 › about 80 › products 60 › infrastructure 55 › vendor/tender 50 › other links from the homepage 10. Each page is scrolled four times for lazy content.
 - "Next" pagination is followed up to three times.
 - Each URL is checked against robots.txt. There is a 1–2.5 s delay between pages, and each site has a 150 s overall budget (it returns what it has read so far).
 - Private, loopback and metadata IPs are rejected (`net.is_public`).
 
+## Read model
+`leads.build()` reads the shown companies and their latest-profile observations in **two queries**: one for the companies, one join `observations ⋈ companies ON company_id AND run_id = last_profile_run` (served by `ix_obs`), grouped in Python. `leads.summary()` uses the same two queries for the dashboard's counts, so `/api/status` (polled every 5 s) never builds every lead.
+
 ## Scoring
-`fit.score()` runs on every read, so editing weights in YAML re-ranks instantly. Traders are capped at 15. A do-not-contact match scores 0 and gets tier X.
+`fit.score()` runs on every read, so editing weights in YAML re-ranks instantly. Traders are capped at 15. A do-not-contact match (the domain, a subdomain, an email, or an email at a listed domain) scores 0 and gets tier X.
 
 ## Scheduling
 - **OS level** (`schedule install`): Windows Task Scheduler with `-StartWhenAvailable` (catches up after sleep or shutdown) and `-MultipleInstances IgnoreNew`. On Linux/macOS, `schedule show` prints a cron line.
@@ -80,6 +88,12 @@ Hits are routed as follows:
 Local: `serve` + Task Scheduler. Cloud (docs/DEPLOY.md): GitHub Actions `engine.yml` runs the engine against Neon; Vercel serves `api/index.py` (the same handler) with `DASHBOARD_PASSWORD`, and "Find leads now" calls the GitHub `workflow_dispatch` API.
 
 ## Security
-- The dashboard binds to 127.0.0.1 and has no auth, so don't expose it. Static file serving is confined to `web/`.
-- All page-derived text is escaped in the UI, and only http(s) links are rendered.
+- The local dashboard binds to 127.0.0.1. It answers only requests whose `Host` is `localhost`, `127.0.0.1` or `web.host` (with the port), plus any names in `web.allowed_hosts`; this blocks DNS-rebinding pages. On Vercel the platform routes by host, so this check is skipped there.
+- CSRF: every POST must be `Content-Type: application/json`, and a request carrying an `Origin` header must come from the dashboard's own host. Anything else gets 403.
+- `DASHBOARD_PASSWORD` turns on HTTP Basic auth (required on Vercel). Ten failed logins per client IP in 10 minutes give 429 until the window passes, even for the right password. The counter is in memory, per process.
+- Run requests accept only the stage names in `engine.STAGES` (server 400, CLI exit 2). The Actions workflow passes inputs through `env:` and validates them in bash; it never interpolates `${{ }}` into a script. Actions are pinned to commit SHAs.
+- A 500 returns `{"error": "internal error"}`; the exception is written to the log, never to the client.
+- SSRF: `net.host_is_public()` (cached per host) rejects private, loopback, link-local, CGNAT, metadata and unspecified addresses. It is applied to the seed URL, to robots.txt (each redirect hop is checked *before* it is requested), to every in-browser request through a Playwright route handler, and to `page.url` after every navigation: a redirect that lands on a private host is discarded and the site's crawl stops. `crawl.allow_private_hosts: true` turns all of this off (tests only).
+  - Residual: Playwright does not run route handlers on redirect hops, so a site that redirects into a private address still causes one blind GET to it (the response is thrown away). Chromium also resolves DNS separately from our check. For hard isolation, run the engine where it has no route to internal networks (GitHub-hosted runners have none).
+- Static file serving is confined to `web/`. All page-derived text is escaped in the UI, and only http(s) links are rendered.
 - Page content is treated as data. It is never executed or followed as instructions.

@@ -14,7 +14,8 @@ Why split it: Vercel's free functions stop after seconds, too short for a 20-min
 
 ## 1. Database: Neon (free)
 1. Create a free project at neon.tech, or in Vercel: Storage → Create → Neon (it adds `DATABASE_URL` to the Vercel project automatically).
-2. Copy the **pooled** connection string (`postgresql://...-pooler...neon.tech/...?sslmode=require`).
+2. Copy the **pooled** connection string: its host contains `-pooler` (`postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/db?sslmode=require`). In Neon's Connect dialog, turn on **Connection pooling**.
+   **Use the pooled string for Vercel.** Every dashboard request is a fresh serverless invocation that opens its own connection, and the direct endpoint runs out of connections quickly; the pooler (PgBouncer) absorbs that. MetalScout already disables prepared statements (`prepare_threshold=None`), which transaction pooling needs. Connections time out after 10 s (`connect_timeout`), so a sleeping or unreachable database gives a quick error instead of a hung request.
 
 ## 2. Engine: GitHub Actions
 Repo → Settings → Secrets and variables → Actions → New repository secret:
@@ -25,7 +26,7 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 | `GROQ_API_KEY` / `CEREBRAS_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | at least one for agents | free keys from console.groq.com, cloud.cerebras.ai, aistudio.google.com, openrouter.ai |
 | `SERPER_API_KEY` | optional | 2,500 free Google searches (otherwise DuckDuckGo) |
 
-Then go to Actions → **engine** → Run workflow. It also runs daily at 01:00 UTC (06:30 IST). Each run's Excel file is kept as an artifact for 14 days.
+Then go to Actions → **engine** → Run workflow. If a run crashes, times out or is cancelled, the workflow's last step marks it `failed` in the database (`python -m metalscout mark-failed`), so the dashboard doesn't keep showing "running". It also runs daily at 01:00 UTC (06:30 IST). Each run's Excel file is kept as an artifact for 14 days. The workflow installs exact, hash-checked versions from `requirements-engine.lock`, its actions are pinned to commit SHAs, and Dependabot proposes weekly updates for both.
 
 ## 3. Dashboard: Vercel
 1. vercel.com → Add New → Project → import `khan09faiz/metalscout`. Framework: **Other**. Leave the build settings empty.
@@ -33,10 +34,12 @@ Then go to Actions → **engine** → Run workflow. It also runs daily at 01:00 
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | same Neon string (auto-added if you used the Vercel → Neon integration) |
+| `DATABASE_URL` | the Neon **pooled** (`-pooler`) string (the Vercel → Neon integration adds one; check that its host has `-pooler`) |
 | `DASHBOARD_PASSWORD` | any password; the browser asks for it (any username) |
 | `GITHUB_REPO` | `khan09faiz/metalscout` |
-| `GITHUB_DISPATCH_TOKEN` | fine-grained token for this repo only, permission **Actions: Read and write** |
+| `GITHUB_DISPATCH_TOKEN` | a **fine-grained** personal access token scoped to this one repository, with only **Actions: Read and write** (no other permissions; classic tokens are too broad) |
+
+The dashboard only sends one of the known stage names (`discover`, `profile`, `signals`, `agents`, `redo-agents`, `export`); anything else gets a 400, and the workflow itself rejects a `stages` input that isn't `a-z`, `,` and `-`. **Ten** failed logins from one IP within 10 minutes lock that IP out for the rest of the window (HTTP 429). On Vercel this counter lives per function instance, so treat it as a brake, not a guarantee, and use a long password.
 
 3. Deploy. Open the URL, log in, and click **Find leads now**. That starts the GitHub Actions run, and the dashboard shows "running" until it finishes.
 
@@ -44,7 +47,7 @@ Then go to Actions → **engine** → Run workflow. It also runs daily at 01:00 
 | Piece | Free allowance | MetalScout use |
 |---|---|---|
 | GitHub Actions (private repo) | 2,000 min/month | ~30 min/day ≈ 900 min/month |
-| Neon | 0.5 GB storage, auto-suspend | ~1–3 MB/day of observations + page digests |
+| Neon | 0.5 GB storage, auto-suspend | ~1–3 MB/day of observations + page digests; only the last `pipeline.keep_profile_runs` (3) profiles per company are kept, so it levels off |
 | Vercel Hobby | personal, non-commercial use; generous function limits | a few requests per visit |
 | Models | free tiers (see docs/AGENTS.md) | ≤150 calls/run (`agents.max_calls_per_run`) |
 

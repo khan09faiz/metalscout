@@ -16,16 +16,40 @@ def _pairs(obs, signal, limit=6):
     return out[:limit]
 
 
-def build(db: DB, cfg: dict, include_traders: bool = True) -> list[dict]:
-    out = []
-    day_ago = time.time() - 86400
-    rows = db.c.execute("SELECT * FROM companies WHERE status IN ('profiled','challenged','failed')").fetchall()
-    for c in rows:
-        c = dict(c)
-        obs = db.latest_observations(c["id"], c["last_profile_run"])
+COMPANY_COLS = "id, domain, name, website, status, stage, notes, found_via, first_seen, last_profiled, error, last_profile_run"
+SHOWN = ("profiled", "challenged", "failed")
+
+
+def _load(db: DB) -> tuple[list[dict], dict[int, list[dict]]]:
+    """Companies to show + their latest-profile observations, in two queries (no per-company query).
+    The join uses ix_obs(company_id, run_id, ...), so no extra index is needed."""
+    marks = ",".join("?" * len(SHOWN))
+    companies = [dict(r) for r in db.c.execute(f"SELECT {COMPANY_COLS} FROM companies WHERE status IN ({marks})", SHOWN)]  # noqa: S608  # constant column list and '?' placeholders
+    obs: dict[int, list[dict]] = {}
+    for r in db.c.execute(
+            "SELECT o.company_id, o.signal, o.value, o.num, o.source_url, o.evidence, o.observed_at FROM observations o "  # noqa: S608  # '?' placeholders only
+            f"JOIN companies c ON c.id = o.company_id AND o.run_id = c.last_profile_run WHERE c.status IN ({marks}) "
+            "ORDER BY o.id", SHOWN):
+        d = dict(r)
+        obs.setdefault(d.pop("company_id"), []).append(d)
+    return companies, obs
+
+
+def _scored(db: DB, cfg: dict):
+    """(company, latest observations, fit, org type) for every company shown."""
+    companies, by_company = _load(db)
+    for c in companies:
+        obs = by_company.get(c["id"], [])
         f = fit.score(c, obs, cfg)
         org = next((o["value"] for o in obs if o["signal"] == "ORG_TYPE"), "unknown")
         org = f.get("org") or org  # a confident agent verdict can override the regex classifier
+        yield c, obs, f, org
+
+
+def build(db: DB, cfg: dict, include_traders: bool = True) -> list[dict]:
+    out = []
+    day_ago = time.time() - 86400
+    for c, obs, f, org in _scored(db, cfg):
         if not include_traders and org == "trader":
             continue
         out.append({
@@ -46,6 +70,22 @@ def build(db: DB, cfg: dict, include_traders: bool = True) -> list[dict]:
     return out
 
 
+def summary(db: DB, cfg: dict) -> dict:
+    """Dashboard counts from the same two queries as build(), without building every lead dict."""
+    day_ago = time.time() - 86400
+    n = {"leads": 0, "A": 0, "B": 0, "new_today": 0, "traders": 0, "ai_leads": 0}
+    for c, obs, f, org in _scored(db, cfg):
+        if org == "trader":
+            n["traders"] += 1
+            continue
+        n["leads"] += 1
+        if f["tier"] in ("A", "B"):
+            n[f["tier"]] += 1
+        n["new_today"] += (c["first_seen"] or 0) >= day_ago
+        n["ai_leads"] += _ai(obs)["has_any"]
+    return n
+
+
 def _ai(obs: list[dict]) -> dict:
     """Agent findings for the UI: every item carries the exact quote and the page it was verified on."""
     out = {"org_type": None, "materials": _pairs(obs, "AGENT_MATERIAL", 8), "volume": _pairs(obs, "AGENT_VOLUME", 2),
@@ -58,7 +98,10 @@ def _ai(obs: list[dict]) -> dict:
             try:
                 out["outreach"] = json.loads(o["value"])
             except ValueError:
-                pass
+                continue
+            ev = o.get("evidence") or ""
+            i = ev.find("unverified numbers:")
+            out["outreach"]["warning"] = ev[i:] if i >= 0 else ""
     out["has_any"] = bool(out["org_type"] or out["outreach"] or any(out[k] for k in ("materials", "volume", "people", "products", "buying_signals")))
     return out
 

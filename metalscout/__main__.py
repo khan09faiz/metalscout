@@ -8,6 +8,7 @@
   python -m metalscout import FILE.csv      import tender/trade-show/marketplace exports
   python -m metalscout export [--out F]     write the Excel sheet now
   python -m metalscout status               counts, last run, next run
+  python -m metalscout mark-failed          mark the latest 'running' run as failed (CI cleanup after a crash/cancel)
   python -m metalscout schedule install|remove|show
 """
 from __future__ import annotations
@@ -21,6 +22,14 @@ from pathlib import Path
 from . import config as C
 
 
+def _stages(s: str) -> tuple[str, ...]:
+    from .engine import STAGES, parse_stages
+    try:
+        return parse_stages(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"{e} (allowed: {', '.join(STAGES)})") from None
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="metalscout")
     p.add_argument("--config", help="path to metalscout.yaml (default: ./metalscout.yaml)")
@@ -28,7 +37,7 @@ def main(argv=None):
     s.add_parser("init")
     r = s.add_parser("run")
     r.add_argument("--trigger", default="manual")
-    r.add_argument("--stages", default="discover,profile,signals,agents,export")
+    r.add_argument("--stages", type=_stages, default="discover,profile,signals,agents,export")
     r.add_argument("--profile-limit", type=int)
     sv = s.add_parser("serve")
     sv.add_argument("--no-scheduler", action="store_true")
@@ -40,6 +49,7 @@ def main(argv=None):
     e = s.add_parser("export")
     e.add_argument("--out")
     s.add_parser("status")
+    s.add_parser("mark-failed")
     sc = s.add_parser("schedule")
     sc.add_argument("action", choices=["install", "remove", "show"])
     args = p.parse_args(argv)
@@ -57,7 +67,7 @@ def main(argv=None):
     cfg = C.load(args.config)
     if args.cmd == "run":
         from .engine import run
-        res = run(cfg, args.trigger, tuple(x.strip() for x in args.stages.split(",") if x.strip()), args.profile_limit)
+        res = run(cfg, args.trigger, args.stages, args.profile_limit)
         print(json.dumps(res, indent=2, default=str))
         sys.exit(0 if res["status"] != "failed" else 1)
     if args.cmd == "serve":
@@ -67,9 +77,10 @@ def main(argv=None):
         serve(cfg, heartbeat=not args.no_scheduler)
     if args.cmd == "add":
         from .engine import open_db
-        from .net import reg_domain
+        from .net import homepage, reg_domain
         db = open_db(cfg)
-        n = sum(db.add_company(reg_domain(u), u if u.startswith("http") else "https://" + u, "manual", "manual") for u in args.urls)
+        urls = [u if u.startswith("http") else "https://" + u for u in args.urls]
+        n = sum(db.add_company(reg_domain(u), homepage(u), "manual", f"manual:{u}") for u in urls)
         print(f"queued {n} new site(s)")
     if args.cmd == "import":
         from .engine import open_db
@@ -87,6 +98,10 @@ def main(argv=None):
         from .engine import open_db
         from .server import status
         print(json.dumps(status(cfg, open_db(cfg)), indent=2, default=str))
+    if args.cmd == "mark-failed":
+        from .engine import open_db
+        rid = open_db(cfg).mark_running_failed("run: marked failed (the process crashed, timed out or was cancelled)")
+        print(f"marked run {rid} as failed" if rid else "no running run")
     if args.cmd == "schedule":
         from . import scheduler
         if args.action == "show":

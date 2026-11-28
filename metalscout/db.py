@@ -13,8 +13,9 @@ import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS companies(
   id INTEGER PRIMARY KEY, domain TEXT UNIQUE NOT NULL, website TEXT, name TEXT,
@@ -41,13 +42,16 @@ CREATE INDEX IF NOT EXISTS ix_agent_runs ON agent_runs(run_id);
 # columns added after v1 (ALTER TABLE ... ADD COLUMN, applied if missing)
 MIGRATIONS = [("companies", "digest", "TEXT DEFAULT ''"), ("companies", "agents_run", "TEXT DEFAULT ''"),
               ("buyer_signals", "digest", "TEXT DEFAULT ''"), ("buyer_signals", "agent", "TEXT DEFAULT ''"),
-              ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0")]
+              ("buyer_signals", "agent_checked", "INTEGER DEFAULT 0"),
+              ("companies", "agent_attempts", "INTEGER DEFAULT 0"), ("buyer_signals", "agent_attempts", "INTEGER DEFAULT 0"),
+              ("runs", "heartbeat", "REAL")]
+RUN_STALE_S = 20 * 60  # a 'running' run with no heartbeat for this long is treated as dead
 
 
 class Row(dict):
     """Dict row that also supports positional access (r[0]), like sqlite3.Row."""
     def __init__(self, names, values):
-        super().__init__(zip(names, values))
+        super().__init__(zip(names, values, strict=False))
         self._values = values
 
     def __getitem__(self, k):
@@ -71,7 +75,8 @@ class PgConn:
         import psycopg
         # autocommit: every statement is its own transaction, so reads never sit "idle in transaction"
         # holding locks (which would block other connections, e.g. the dashboard during a run)
-        self.pg = psycopg.connect(url, autocommit=True, prepare_threshold=None)
+        # connect_timeout: fail fast instead of hanging a serverless request when Neon is waking up or unreachable
+        self.pg = psycopg.connect(url, autocommit=True, prepare_threshold=None, connect_timeout=10)
 
     @staticmethod
     def _factory(cur):
@@ -116,6 +121,7 @@ class DB:
         url = url if url is not None else os.getenv("DATABASE_URL", "")
         url = url.strip().strip("\"'").strip()  # tolerate a pasted value with quotes or a trailing newline
         self.is_pg = url.startswith(("postgres://", "postgresql://"))
+        self.c: Any  # sqlite3.Connection or PgConn (same execute/commit surface)
         if self.is_pg:
             self.c = PgConn(url)
             # DDL only when the schema is missing or older; skips table locks on every dashboard request
@@ -170,15 +176,32 @@ class DB:
             "SELECT * FROM companies WHERE status='new' OR (status IN ('profiled','failed') AND COALESCE(last_profiled,0) < ?) "
             "ORDER BY CASE status WHEN 'new' THEN 0 ELSE 1 END, first_seen LIMIT ?", (cutoff, limit)).fetchall()
 
-    def save_profile(self, company_id: int, run_id: str, name: str, status: str, obs: list[dict], error: str = "") -> None:
+    def save_profile(self, company_id: int, run_id: str, name: str, status: str, obs: list[dict], error: str = "",
+                     keep_runs: int = 3) -> None:
         t = now()
         self.c.executemany(
             "INSERT INTO observations(company_id,run_id,signal,value,num,source_url,evidence,observed_at) VALUES(?,?,?,?,?,?,?,?)",
             [(company_id, run_id, o["signal"], str(o.get("value", "")), o.get("num"), o.get("source_url", ""),
               (o.get("evidence") or "")[:400], t) for o in obs])
-        self.c.execute("UPDATE companies SET name=COALESCE(NULLIF(?,''),name), status=?, last_profiled=?, last_profile_run=?, error=? WHERE id=?",
+        self.c.execute("UPDATE companies SET name=COALESCE(NULLIF(?,''),name), status=?, last_profiled=?, last_profile_run=?, error=?, "
+                       "agent_attempts=0 WHERE id=?",
                        (name, status, t, run_id, error, company_id))
         self.c.commit()
+        if keep_runs > 0:
+            self.prune_observations(company_id, keep_runs)
+
+    def prune_observations(self, company_id: int, keep_runs: int) -> int:
+        """Delete this company's observations (agent facts included) outside its last `keep_runs` profile runs."""
+        runs = [r[0] for r in self.c.execute(
+            "SELECT run_id FROM observations WHERE company_id=? AND run_id IS NOT NULL GROUP BY run_id "
+            "ORDER BY MIN(observed_at) DESC, run_id DESC", (company_id,))]
+        if len(runs) <= keep_runs:
+            return 0
+        keep = runs[:keep_runs]
+        cur = self.c.execute(f"DELETE FROM observations WHERE company_id=? AND (run_id IS NULL OR run_id NOT IN ({','.join('?' * len(keep))}))",  # noqa: S608  # only '?' placeholders are interpolated
+                             (company_id, *keep))
+        self.c.commit()
+        return cur.rowcount
 
     def latest_observations(self, company_id: int, run_id: str | None) -> list[dict]:
         if not run_id:
@@ -191,7 +214,7 @@ class DB:
         allowed = {k: v for k, v in fields.items() if k in ("stage", "notes")}
         if allowed:
             sets = ",".join(f"{k}=?" for k in allowed)
-            self.c.execute(f"UPDATE companies SET {sets} WHERE id=?", (*allowed.values(), cid))
+            self.c.execute(f"UPDATE companies SET {sets} WHERE id=?", (*allowed.values(), cid))  # noqa: S608  # column names filtered to stage/notes above
             self.c.commit()
 
     # ---- buyer signals
@@ -205,7 +228,7 @@ class DB:
 
     def update_signal(self, sid: int, **row) -> None:
         row = {k: (json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v) for k, v in row.items()}
-        self.c.execute(f"UPDATE buyer_signals SET {','.join(f'{k}=?' for k in row)} WHERE id=?", (*row.values(), sid))
+        self.c.execute(f"UPDATE buyer_signals SET {','.join(f'{k}=?' for k in row)} WHERE id=?", (*row.values(), sid))  # noqa: S608  # column names come from internal callers, values are bound
         self.c.commit()
 
     def signals_to_open(self, limit: int) -> list[sqlite3.Row]:
@@ -214,8 +237,9 @@ class DB:
     # ---- runs
     def start_run(self, trigger: str) -> str:
         rid = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-        self.c.execute("INSERT INTO runs(id,trigger,started,status,stats,errors) VALUES(?,?,?,?,?,?)",
-                       (rid, trigger, now(), "running", "{}", "[]"))
+        t = now()
+        self.c.execute("INSERT INTO runs(id,trigger,started,heartbeat,status,stats,errors) VALUES(?,?,?,?,?,?,?)",
+                       (rid, trigger, t, t, "running", "{}", "[]"))
         self.c.commit()
         return rid
 
@@ -225,8 +249,23 @@ class DB:
         self.c.commit()
 
     def update_run_stats(self, rid: str, stats: dict) -> None:
-        self.c.execute("UPDATE runs SET stats=? WHERE id=?", (json.dumps(stats), rid))
+        self.c.execute("UPDATE runs SET stats=?, heartbeat=? WHERE id=?", (json.dumps(stats), now(), rid))
         self.c.commit()
+
+    def heartbeat(self, rid: str) -> None:
+        """Tell the dashboard (and the next run) that this run is still alive."""
+        self.c.execute("UPDATE runs SET heartbeat=? WHERE id=?", (now(), rid))
+        self.c.commit()
+
+    def mark_running_failed(self, reason: str) -> str | None:
+        """Mark the latest 'running' run as failed (the process died or was cancelled). Returns its id."""
+        r = self.c.execute("SELECT id, errors FROM runs WHERE status='running' ORDER BY started DESC LIMIT 1").fetchone()
+        if not r:
+            return None
+        errors = json.loads(r["errors"] or "[]") + [reason]
+        self.c.execute("UPDATE runs SET status='failed', finished=?, errors=? WHERE id=?", (now(), json.dumps(errors[-50:]), r["id"]))
+        self.c.commit()
+        return r["id"]
 
     def runs(self, limit: int = 30) -> list[dict]:
         out = []
@@ -237,13 +276,15 @@ class DB:
         return out
 
     def last_run(self, statuses=("ok", "partial")) -> dict | None:
-        q = f"SELECT * FROM runs WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY started DESC LIMIT 1"
+        q = f"SELECT * FROM runs WHERE status IN ({','.join('?' * len(statuses))}) ORDER BY started DESC LIMIT 1"  # noqa: S608  # only '?' placeholders are interpolated
         r = self.c.execute(q, statuses).fetchone()
         return dict(r) if r else None
 
-    def running_run(self, max_age_s: float = 6 * 3600) -> dict | None:
-        r = self.c.execute("SELECT * FROM runs WHERE status='running' AND started > ? ORDER BY started DESC LIMIT 1",
-                           (now() - max_age_s,)).fetchone()
+    def running_run(self, stale_s: float = RUN_STALE_S) -> dict | None:
+        """The active run, if any: status 'running' and a heartbeat within `stale_s` (a crashed or cancelled
+        run stops beating, so it stops blocking new runs and the dashboard's "running" state)."""
+        r = self.c.execute("SELECT * FROM runs WHERE status='running' AND COALESCE(heartbeat, started) > ? "
+                           "ORDER BY started DESC LIMIT 1", (now() - stale_s,)).fetchone()
         return dict(r) if r else None
 
     # ---- agents
@@ -251,15 +292,26 @@ class DB:
         self.c.execute("UPDATE companies SET digest=? WHERE id=?", (digest[:12000], company_id))
         self.c.commit()
 
-    def companies_for_agents(self, limit: int) -> list:
-        """Profiled companies whose latest profile has not been through the agents yet."""
+    def companies_for_agents(self, limit: int, max_attempts: int = 3) -> list:
+        """Profiled companies whose latest profile has not been through the agents yet. Rows whose model calls
+        failed `max_attempts` times are left out; fewer failures go first, so they can't starve new work."""
         return self.c.execute(
             "SELECT * FROM companies WHERE status='profiled' AND COALESCE(digest,'')<>'' "
-            "AND COALESCE(agents_run,'')<>COALESCE(last_profile_run,'') ORDER BY last_profiled DESC LIMIT ?", (limit,)).fetchall()
+            "AND COALESCE(agents_run,'')<>COALESCE(last_profile_run,'') AND COALESCE(agent_attempts,0) < ? "
+            "ORDER BY COALESCE(agent_attempts,0), last_profiled DESC LIMIT ?", (max_attempts, limit)).fetchall()
 
-    def signals_for_agents(self, limit: int) -> list:
+    def signals_for_agents(self, limit: int, max_attempts: int = 3) -> list:
         return self.c.execute("SELECT * FROM buyer_signals WHERE COALESCE(agent_checked,0)=0 AND opened<>-1 "
-                              "ORDER BY intent DESC, first_seen DESC LIMIT ?", (limit,)).fetchall()
+                              "AND COALESCE(agent_attempts,0) < ? "
+                              "ORDER BY COALESCE(agent_attempts,0), intent DESC, first_seen DESC LIMIT ?",
+                              (max_attempts, limit)).fetchall()
+
+    def agent_failed(self, table: str, row_id: int) -> None:
+        """Count one failed agent attempt on a company or buyer signal."""
+        if table not in ("companies", "buyer_signals"):
+            raise ValueError(table)
+        self.c.execute(f"UPDATE {table} SET agent_attempts=COALESCE(agent_attempts,0)+1 WHERE id=?", (row_id,))  # noqa: S608  # table validated against a fixed set above
+        self.c.commit()
 
     def add_observations(self, company_id: int, run_id: str, obs: list[dict]) -> None:
         t = now()
@@ -272,12 +324,12 @@ class DB:
     def reset_agents(self) -> None:
         """Forget all agent output so the crew re-analyses everything on the next 'agents' stage."""
         self.c.execute("DELETE FROM observations WHERE substr(signal, 1, 6) = 'AGENT_'")
-        self.c.execute("UPDATE companies SET agents_run = ''")
-        self.c.execute("UPDATE buyer_signals SET agent_checked = 0, agent = ''")
+        self.c.execute("UPDATE companies SET agents_run = '', agent_attempts = 0")
+        self.c.execute("UPDATE buyer_signals SET agent_checked = 0, agent = '', agent_attempts = 0")
         self.c.commit()
 
     def mark_agents_done(self, company_id: int, profile_run: str) -> None:
-        self.c.execute("UPDATE companies SET agents_run=? WHERE id=?", (profile_run, company_id))
+        self.c.execute("UPDATE companies SET agents_run=?, agent_attempts=0 WHERE id=?", (profile_run, company_id))
         self.c.commit()
 
     def log_agent(self, run_id: str, company_id: int | None, agent: str, provider: str, model: str, ok: bool,

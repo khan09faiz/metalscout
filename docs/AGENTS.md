@@ -17,8 +17,17 @@ crawl ─► profile (regex, free) ─► Orchestrator (rules, no model)
 ## Why this design
 - **Cheapest model that can do the job.** Classification needs a small fast model; extraction and writing get the strongest free model. The orchestrator is plain code, because deciding *who runs* doesn't need a model.
 - **Agents never invent contacts.** Emails and phones still come only from the regex extractors. Agents add judgement and structure: what they make, which metal and grade, how much, who's in charge.
-- **The grounding gate makes hallucination visible.** Each fact carries a `quote`. `agents/ground.py` normalises case and whitespace and checks that the quote occurs in the crawled text. The page it was found on becomes the fact's `source_url`. Anything else is counted as *rejected* on the Agents tab and never stored.
+- **The grounding gate makes hallucination visible.** Each fact carries a `quote`. `agents/ground.py` normalises case and whitespace and checks that the quote occurs in the crawled text (`locate`). The page it was found on becomes the fact's `source_url`. Then `supports` checks that the quote backs the value, because a real but irrelevant sentence ("ISO 9001 certified company" offered as proof of copper) is still a hallucination:
+  - material: the quote matches that metal's extractor regex
+  - volume: the number (commas ignored) appears in the quote
+  - person: the name appears in the quote
+  - product: a word of 4+ letters from the name appears in the quote
+
+  Anything that fails either check is counted as *rejected* on the Agents tab and never stored. The Sorter goes through the same gate, but org type has no value rule: the Sorter only runs when the regex classifier found too little to decide, so requiring a regex hit in its quote would reject exactly the cases it exists for.
+- **Drafts are checked, not trusted.** Any number in the Writer's subject or body that isn't in the facts it was given is listed as `unverified numbers: …`. The draft is still stored, and the lead drawer shows the warning above it.
+- **Page text is untrusted.** Every prompt says the website text is data, not instructions, and that instructions inside it must be ignored. Independently of the model's behaviour, nothing a model returns is ever used as a URL to crawl, a company to add, or an email/phone: contacts come only from the regex extractors, and a test feeds the crew injected URLs, emails and phones to prove it.
 - **Idempotent.** A company goes through the crew once per profile run (`companies.agents_run`). Re-running costs no model calls until the site is re-crawled, by default every 30 days.
+- **Failures retry, but can't starve the queue.** If any model call for a company or buyer signal fails (rate limit, outage), nothing is stored, the row stays queued, and its `agent_attempts` goes up by one. The queue serves rows with fewer attempts first, and skips rows that reached `agents.max_attempts` (default 3). The counter resets when the agents finish the row, on `redo-agents`, and when the company is re-profiled.
 
 ## Free model providers
 The router (`agents/llm.py`) speaks the OpenAI-compatible chat API that all of these offer. It lists each provider's current models at run time and picks one by pattern, because free-tier model names change often. On a 429, quota error or bad JSON it falls through to the next provider.
@@ -40,6 +49,7 @@ agents:
   signals_per_run: 30        # buyer-signal pages read by the Scout
   max_calls_per_run: 150     # hard budget across all agents
   min_confidence: 0.7        # Sorter verdict needed to override the regex classifier
+  max_attempts: 3            # give up on a company/signal after this many failed agent runs (until re-profiled)
   write_for_tiers: [A, B]
   analyst_max_chars: 12000   # page text the Analyst reads; use ~4000 for CPU-only Ollama
   providers:                 # optional overrides
@@ -52,7 +62,7 @@ agents:
 - Cloud free tiers (Groq, Cerebras) answer in seconds, so use them for scheduled runs.
 
 ## Editing agents
-Prompts are Markdown in `prompts/agents/` (`sorter.md`, `analyst.md`, `writer.md`, `scout.md`). Change wording, add fields or tighten rules there. To add an agent, write a prompt and add one branch in `agents/crew.py: Crew.run_company`.
+Prompts are Markdown in [`metalscout/prompts/agents/`](../metalscout/prompts/agents/) (`sorter.md`, `analyst.md`, `writer.md`, `scout.md`). Change wording, add fields or tighten rules there. To add an agent, write a prompt and add one branch in `agents/crew.py: Crew.run_company`.
 
 ## What you see
 - **Agents tab:** roster cards (calls, ok, rejected, models used), provider switches, and a per-model table with latency.
